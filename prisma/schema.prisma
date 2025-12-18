@@ -1,0 +1,582 @@
+// Key changes made:
+// 1. Ensured User.station relation name is lowercase "station"
+// 2. Station.User relation properly references back with "UserStation"
+// 3. All other relations updated for consistency
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  STATION_COMMANDER
+  OCS
+  DETECTIVE
+  TRAFFIC_OFFICER
+  GBV_OFFICER
+  RECORDS_OFFICER
+  OFFICER
+  CONSTABLE
+  PUBLIC
+}
+
+enum IncidentStatus {
+  REPORTED
+  UNDER_INVESTIGATION
+  RESOLVED
+  CLOSED
+  TRANSFERRED
+}
+
+enum CaseStatus {
+  OPEN
+  UNDER_INVESTIGATION
+  PENDING_TRIAL
+  IN_COURT
+  CLOSED
+  DISMISSED
+}
+
+enum IncidentCategory {
+  THEFT
+  ROBBERY
+  ASSAULT
+  MURDER
+  RAPE
+  DOMESTIC_VIOLENCE
+  FRAUD
+  BURGLARY
+  TRAFFIC_ACCIDENT
+  KIDNAPPING
+  DRUG_RELATED
+  CYBERCRIME
+  CORRUPTION
+  MISSING_PERSON
+  OTHER
+}
+
+enum AlertType {
+  CRITICAL
+  WARNING
+  INFO
+  SUCCESS
+  APB
+}
+
+enum AlertPriority {
+  HIGH
+  MEDIUM
+  LOW
+  URGENT
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+  ARCHIVED
+}
+
+// ============================================
+// MODELS
+// ============================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  password      String
+  role          UserRole  @default(OFFICER)
+  badgeNumber   String?   @unique
+  phoneNumber   String?
+  stationId     String?
+  isActive      Boolean   @default(true)
+  lastLogin     DateTime?
+  
+  // Profile fields
+  avatar        String?
+  department    String?
+  rank          String?
+  dateOfBirth   DateTime?
+  emergencyContact String?
+  emergencyPhone   String?
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Relations - FIXED: lowercase "station"
+  station                      Station?         @relation("UserStation", fields: [stationId], references: [id])
+  AuditLog                     AuditLog[]
+  Case_Case_assignedToIdToUser Case[]           @relation("Case_assignedToIdToUser")
+  Case_Case_createdByIdToUser  Case[]           @relation("Case_createdByIdToUser")
+  OccurrenceBook               OccurrenceBook[]
+  Message                      Message[]
+  sentInternalMessages         InternalMessage[] @relation("SentMessages")
+  receivedInternalMessages     InternalMessage[] @relation("ReceivedMessages")
+  createdAlerts                Alert[]          @relation("CreatedAlerts")
+  acknowledgedAlerts           AlertAcknowledgment[]
+  notifications                Notification[]
+  profileChanges               ProfileHistory[]
+  loginHistory                 LoginHistory[]
+  
+  @@index([stationId])
+  @@index([email])
+  @@index([badgeNumber])
+  @@index([role])
+  @@index([isActive])
+  @@map("User")
+}
+
+model Station {
+  id          String   @id @default(cuid())
+  name        String
+  code        String   @unique
+  county      String
+  subCounty   String
+  address     String
+  phoneNumber String
+  email       String?
+  latitude    Float?
+  longitude   Float?
+  commander   String?
+  capacity    Int?
+  isActive    Boolean  @default(true)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations - FIXED: User relation properly named
+  User               User[]            @relation("UserStation")
+  Case               Case[]            @relation("StationCases")
+  Criminal           Criminal[]        @relation("StationCriminals")
+  OccurrenceBook     OccurrenceBook[]  @relation("StationOccurrenceBooks")
+  Vehicle            Vehicle[]         @relation("StationVehicles")
+  alerts             Alert[]           @relation("StationAlerts")
+  internalMessages   InternalMessage[] @relation("StationMessages")
+  
+  @@index([county])
+  @@index([code])
+  @@index([isActive])
+  @@map("Station")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String
+  entity    String
+  entityId  String
+  changes   Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  User      User     @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
+  @@index([entity, entityId])
+  @@index([userId])
+  @@index([action])
+  @@map("AuditLog")
+}
+
+model Case {
+  id                           String           @id @default(cuid())
+  caseNumber                   String           @unique
+  title                        String
+  description                  String
+  category                     IncidentCategory
+  status                       CaseStatus       @default(OPEN)
+  priority                     String           @default("MEDIUM")
+  stationId                    String
+  assignedToId                 String?
+  createdById                  String
+  courtDate                    DateTime?
+  courtCase                    String?
+  outcome                      String?
+  closedAt                     DateTime?
+  createdAt                    DateTime         @default(now())
+  updatedAt                    DateTime         @updatedAt
+  
+  User_Case_assignedToIdToUser User?            @relation("Case_assignedToIdToUser", fields: [assignedToId], references: [id])
+  User_Case_createdByIdToUser  User             @relation("Case_createdByIdToUser", fields: [createdById], references: [id])
+  Station                      Station          @relation("StationCases", fields: [stationId], references: [id])
+  Evidence                     Evidence[]
+  OccurrenceBook               OccurrenceBook?
+  criminals                    Criminal[]       @relation("CriminalCases")
+
+  @@index([assignedToId])
+  @@index([caseNumber])
+  @@index([category])
+  @@index([stationId])
+  @@index([status])
+  @@index([createdById])
+  @@map("Case")
+}
+
+model Criminal {
+  id                String             @id @default(cuid())
+  firstName         String
+  middleName        String?
+  lastName          String
+  alias             String[]           @default([])
+  dateOfBirth       DateTime?
+  gender            String
+  nationality       String             @default("Kenyan")
+  idNumber          String?            @unique
+  phoneNumber       String?
+  address           String?
+  photoUrl          String?
+  fingerprints      String[]           @default([])
+  knownAssociates   Json?
+  criminalHistory   Json[]             @default([])
+  isWanted          Boolean            @default(false)
+  wantedReason      String?
+  lastKnownLocation String?
+  stationId         String
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  
+  Station           Station            @relation("StationCriminals", fields: [stationId], references: [id])
+  CriminalEvidence  CriminalEvidence[]
+  cases             Case[]             @relation("CriminalCases")
+
+  @@index([idNumber])
+  @@index([isWanted])
+  @@index([lastName, firstName])
+  @@index([stationId])
+  @@map("Criminal")
+}
+
+model CriminalEvidence {
+  id          String   @id @default(cuid())
+  criminalId  String
+  type        String
+  title       String
+  description String?
+  fileUrl     String
+  fileName    String
+  fileSize    Int?
+  mimeType    String?
+  uploadedBy  String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  Criminal    Criminal @relation(fields: [criminalId], references: [id], onDelete: Cascade)
+
+  @@index([criminalId])
+  @@index([type])
+  @@map("CriminalEvidence")
+}
+
+model Evidence {
+  id             String   @id @default(cuid())
+  caseId         String
+  type           String
+  description    String
+  fileUrl        String?
+  collectedBy    String
+  collectedAt    DateTime
+  chainOfCustody Json[]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  Case           Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@map("Evidence")
+}
+
+model Message {
+  id          String   @id @default(cuid())
+  senderId    String
+  recipientId String?
+  subject     String
+  body        String
+  priority    String   @default("NORMAL")
+  isRead      Boolean  @default(false)
+  type        String   @default("MESSAGE")
+  createdAt   DateTime @default(now())
+  User        User     @relation(fields: [senderId], references: [id])
+
+  @@index([createdAt])
+  @@index([recipientId])
+  @@index([senderId])
+  @@map("Message")
+}
+
+model OccurrenceBook {
+  id            String           @id @default(cuid())
+  obNumber      String           @unique
+  incidentDate  DateTime
+  reportedDate  DateTime         @default(now())
+  category      IncidentCategory
+  description   String
+  location      String
+  latitude      Float?
+  longitude     Float?
+  status        IncidentStatus   @default(REPORTED)
+  reportedBy    String
+  contactNumber String
+  stationId     String
+  recordedById  String
+  evidenceFiles String[]         @default([])
+  witnesses     Json?
+  suspects      Json?
+  caseId        String?          @unique
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  
+  Case          Case?            @relation(fields: [caseId], references: [id])
+  User          User             @relation(fields: [recordedById], references: [id])
+  Station       Station          @relation("StationOccurrenceBooks", fields: [stationId], references: [id])
+
+  @@index([category])
+  @@index([incidentDate])
+  @@index([obNumber])
+  @@index([stationId])
+  @@index([status])
+  @@index([recordedById])
+  @@map("OccurrenceBook")
+}
+
+model Vehicle {
+  id                 String    @id @default(cuid())
+  registrationNumber String    @unique
+  make               String
+  model              String
+  year               Int
+  color              String
+  stationId          String
+  assignedTo         String?
+  mileage            Int       @default(0)
+  lastService        DateTime?
+  nextService        DateTime?
+  status             String    @default("ACTIVE")
+  fuelConsumption    Json[]    @default([])
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  Station            Station   @relation("StationVehicles", fields: [stationId], references: [id])
+
+  @@index([registrationNumber])
+  @@index([stationId])
+  @@index([status])
+  @@map("Vehicle")
+}
+
+model InternalMessage {
+  id          String        @id @default(cuid())
+  senderId    String
+  sender      User          @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId  String
+  receiver    User          @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+  subject     String
+  content     String        @db.Text
+  status      MessageStatus @default(SENT)
+  priority    AlertPriority @default(MEDIUM)
+  isRead      Boolean       @default(false)
+  readAt      DateTime?
+  isArchived  Boolean       @default(false)
+  archivedAt  DateTime?
+  threadId    String?
+  replyToId   String?
+  attachments String[]      @default([])
+  stationId   String?
+  station     Station?      @relation("StationMessages", fields: [stationId], references: [id], onDelete: SetNull)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([stationId])
+  @@index([status])
+  @@index([isRead])
+  @@index([createdAt])
+  @@index([threadId])
+  @@map("InternalMessage")
+}
+
+model Alert {
+  id          String        @id @default(cuid())
+  title       String
+  message     String        @db.Text
+  type        AlertType     @default(INFO)
+  priority    AlertPriority @default(MEDIUM)
+  scope       String        @default("STATION")
+  targetRoles String[]      @default([])
+  createdById String
+  createdBy   User          @relation("CreatedAlerts", fields: [createdById], references: [id], onDelete: Restrict)
+  stationId   String?
+  station     Station?      @relation("StationAlerts", fields: [stationId], references: [id], onDelete: SetNull)
+  isActive    Boolean       @default(true)
+  expiresAt   DateTime?
+  acknowledgments AlertAcknowledgment[]
+  metadata    Json?
+  attachments String[]      @default([])
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  @@index([createdById])
+  @@index([stationId])
+  @@index([type])
+  @@index([priority])
+  @@index([isActive])
+  @@index([createdAt])
+  @@index([scope])
+  @@map("Alert")
+}
+
+model AlertAcknowledgment {
+  id            String   @id @default(cuid())
+  alertId       String
+  alert         Alert    @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  acknowledgedAt DateTime @default(now())
+  notes         String?  @db.Text
+  
+  @@unique([alertId, userId])
+  @@index([alertId])
+  @@index([userId])
+  @@map("AlertAcknowledgment")
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  message     String   @db.Text
+  type        String
+  relatedId   String?
+  relatedType String?
+  isRead      Boolean  @default(false)
+  readAt      DateTime?
+  actionUrl   String?
+  createdAt   DateTime @default(now())
+  
+  @@index([userId])
+  @@index([isRead])
+  @@index([type])
+  @@index([createdAt])
+  @@map("Notification")
+}
+
+model ProfileHistory {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  field       String
+  oldValue    String?  @db.Text
+  newValue    String?  @db.Text
+  changedBy   String
+  reason      String?  @db.Text
+  createdAt   DateTime @default(now())
+  
+  @@index([userId])
+  @@index([field])
+  @@index([createdAt])
+  @@map("ProfileHistory")
+}
+
+model LoginHistory {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  loginTime   DateTime @default(now())
+  logoutTime  DateTime?
+  ipAddress   String?
+  userAgent   String?
+  location    String?
+  device      String?
+  success     Boolean  @default(true)
+  failReason  String?
+  
+  @@index([userId])
+  @@index([loginTime])
+  @@index([success])
+  @@map("LoginHistory")
+}
+
+model SystemSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String   @db.Text
+  dataType    String
+  category    String
+  description String?  @db.Text
+  isPublic    Boolean  @default(false)
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([key])
+  @@index([category])
+  @@map("SystemSetting")
+}
+
+model StationSetting {
+  id          String   @id @default(cuid())
+  stationCode String
+  key         String
+  value       String   @db.Text
+  dataType    String
+  category    String
+  description String?  @db.Text
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@unique([stationCode, key])
+  @@index([stationCode])
+  @@index([key])
+  @@map("StationSetting")
+}
+
+model FileUpload {
+  id          String   @id @default(cuid())
+  fileName    String
+  originalName String
+  fileSize    Int
+  mimeType    String
+  fileUrl     String
+  uploadedBy  String
+  entityType  String
+  entityId    String
+  isPublic    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  
+  @@index([entityType, entityId])
+  @@index([uploadedBy])
+  @@index([createdAt])
+  @@map("FileUpload")
+}
+
+model PublicReport {
+  id            String   @id @default(cuid())
+  reportNumber  String   @unique @default(cuid())
+  category      IncidentCategory
+  description   String   @db.Text
+  location      String
+  reporterName  String
+  reporterEmail String?
+  reporterPhone String
+  isAnonymous   Boolean  @default(false)
+  status        String   @default("PENDING")
+  assignedToStation String?
+  convertedToOB String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@index([status])
+  @@index([assignedToStation])
+  @@index([createdAt])
+  @@map("PublicReport")
+}
