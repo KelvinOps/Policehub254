@@ -1,8 +1,4 @@
-// ============================================
-// FILE 2: src/types/user.ts
-// ============================================
-
-import { UserRole } from '@/lib/constants/roles';
+import { UserRole } from '@prisma/client'; // Changed from '@/lib/constants/roles'
 
 export interface User {
   id: string;

@@ -1,5 +1,3 @@
-// src/lib/auth/case-permissions.ts
-
 import { UserRole } from '@prisma/client';
 import { Case, SessionUser } from '@/types/case';
 
@@ -137,7 +135,9 @@ export function getCasePermissions(
       };
 
     case UserRole.GBV_OFFICER:
-      const isGBVCase = caseData?.category === 'RAPE' || caseData?.category === 'DOMESTIC_VIOLENCE';
+      const isGBVCase = caseData?.category === 'RAPE' || 
+                       caseData?.category === 'DOMESTIC_VIOLENCE' ||
+                       caseData?.category === 'SEXUAL_HARASSMENT';
       return {
         ...baseOfficerPermissions,
         canEdit: isInvolved && isSameStation && isGBVCase,
@@ -235,4 +235,38 @@ export function getAssignableRoles(): UserRole[] {
     UserRole.TRAFFIC_OFFICER,
     UserRole.GBV_OFFICER,
   ];
+}
+
+/**
+ * Check if a user can edit a specific case
+ */
+export function canEditCase(user: SessionUser, caseData: Case): boolean {
+  const permissions = getCasePermissions(user, caseData);
+  
+  if (!permissions.canEdit) {
+    return false;
+  }
+  
+  // Additional checks based on role
+  switch (user.role) {
+    case UserRole.SUPER_ADMIN:
+    case UserRole.ADMIN:
+      return true;
+      
+    case UserRole.STATION_COMMANDER:
+    case UserRole.OCS:
+      return caseData.stationId === user.stationId;
+      
+    case UserRole.DETECTIVE:
+    case UserRole.OFFICER:
+    case UserRole.CONSTABLE:
+    case UserRole.TRAFFIC_OFFICER:
+    case UserRole.GBV_OFFICER:
+      return (caseData.createdById === user.id || 
+              caseData.assignedToId === user.id) &&
+              caseData.stationId === user.stationId;
+              
+    default:
+      return false;
+  }
 }

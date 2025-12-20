@@ -1,5 +1,3 @@
-// src/types/case.ts
-
 import { CaseStatus, IncidentCategory, UserRole } from '@prisma/client';
 
 export interface Case {

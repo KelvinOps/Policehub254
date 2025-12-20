@@ -62,6 +62,7 @@ enum IncidentCategory {
   CYBERCRIME
   CORRUPTION
   MISSING_PERSON
+  SEXUAL_HARASSMENT 
   OTHER
 }
 

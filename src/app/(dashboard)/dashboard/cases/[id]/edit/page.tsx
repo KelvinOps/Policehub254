@@ -1,13 +1,11 @@
-// src/app/(dashboard)/dashboard/cases/[id]/edit/page.tsx
-
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { ArrowLeft, Save, AlertCircle } from 'lucide-react';
-import { Case } from '@/types/case';
-import { CaseStatus, IncidentCategory } from '@prisma/client';
+import { Case, SessionUser } from '@/types/case';
+import { CaseStatus, IncidentCategory, UserRole } from '@prisma/client';
 import { getCasePermissions } from '@/lib/auth/case-permissions';
 
 interface Officer {
@@ -16,14 +14,29 @@ interface Officer {
   badgeNumber: string;
 }
 
-export default function EditCasePage({ params }: { params: { id: string } }) {
+type Priority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+interface CaseFormData {
+  title: string;
+  description: string;
+  category: IncidentCategory | '';
+  priority: Priority;
+  status: CaseStatus | '';
+  assignedToId: string;
+  courtDate: string;
+  courtCase: string;
+  outcome: string;
+}
+
+export default function EditCasePage() {
   const router = useRouter();
+  const params = useParams();
   const { data: session } = useSession();
   const [loading, setLoading] = useState(false);
   const [caseData, setCaseData] = useState<Case | null>(null);
   const [officers, setOfficers] = useState<Officer[]>([]);
   
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<CaseFormData>({
     title: '',
     description: '',
     category: '' as IncidentCategory | '',
@@ -37,11 +50,14 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  // Get the case ID from params
+  const caseId = Array.isArray(params?.id) ? params.id[0] : params?.id || '';
+
   useEffect(() => {
-    if (session?.user) {
+    if (session?.user && caseId) {
       loadCase();
     }
-  }, [params.id, session]);
+  }, [caseId, session]);
 
   useEffect(() => {
     if (caseData?.stationId) {
@@ -51,7 +67,22 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
 
   const loadCase = async () => {
     try {
-      const response = await fetch(`/api/cases/${params.id}`);
+      const response = await fetch(`/api/cases/${caseId}`);
+      
+      if (!response.ok) {
+        if (response.status === 403) {
+          alert('You do not have permission to view this case');
+          router.push('/dashboard/cases');
+          return;
+        }
+        if (response.status === 404) {
+          alert('Case not found');
+          router.push('/dashboard/cases');
+          return;
+        }
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
       const data = await response.json();
 
       if (data.success) {
@@ -70,19 +101,23 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
           outcome: caseInfo.outcome || '',
         });
       } else {
-        if (response.status === 403) {
-          alert('You do not have permission to edit this case');
-          router.push('/dashboard/cases');
-        }
+        alert(data.error || 'Failed to load case data');
       }
     } catch (error) {
       console.error('Error loading case:', error);
+      alert('An error occurred while loading the case');
     }
   };
 
   const loadOfficers = async (stationId: string) => {
     try {
-      const response = await fetch(`/api/users?stationId=${stationId}&role=DETECTIVE,OFFICER,CONSTABLE`);
+      const roles = 'DETECTIVE,OFFICER,CONSTABLE,TRAFFIC_OFFICER,GBV_OFFICER';
+      const response = await fetch(`/api/users?stationId=${stationId}&roles=${roles}`);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
       const data = await response.json();
       if (data.success) {
         setOfficers(data.data);
@@ -97,15 +132,42 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
 
     if (!formData.title.trim()) {
       newErrors.title = 'Case title is required';
+    } else if (formData.title.length < 5) {
+      newErrors.title = 'Case title must be at least 5 characters';
     }
+
     if (!formData.description.trim()) {
       newErrors.description = 'Case description is required';
+    } else if (formData.description.length < 10) {
+      newErrors.description = 'Case description must be at least 10 characters';
     }
+
     if (!formData.category) {
       newErrors.category = 'Case category is required';
     }
+
     if (!formData.status) {
       newErrors.status = 'Case status is required';
+    }
+
+    if (!['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(formData.priority)) {
+      newErrors.priority = 'Invalid priority value';
+    }
+
+    // Validate court date if court case number is provided
+    if (formData.courtCase && !formData.courtDate) {
+      newErrors.courtDate = 'Court date is required when court case number is provided';
+    }
+
+    // Validate court date is not in the past for future court dates
+    if (formData.courtDate) {
+      const courtDate = new Date(formData.courtDate);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      if (courtDate < today && (formData.status === 'PENDING_TRIAL' || formData.status === 'IN_COURT')) {
+        newErrors.courtDate = 'Court date cannot be in the past for pending or active court cases';
+      }
     }
 
     setErrors(newErrors);
@@ -123,36 +185,41 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
       setLoading(true);
       
       const submitData: any = {
-        title: formData.title,
-        description: formData.description,
+        title: formData.title.trim(),
+        description: formData.description.trim(),
         priority: formData.priority,
         status: formData.status,
         assignedToId: formData.assignedToId || null,
-        courtCase: formData.courtCase || null,
-        outcome: formData.outcome || null,
+        courtCase: formData.courtCase.trim() || null,
+        outcome: formData.outcome.trim() || null,
       };
 
       if (formData.courtDate) {
         submitData.courtDate = new Date(formData.courtDate).toISOString();
       }
 
-      const response = await fetch(`/api/cases/${params.id}`, {
+      const response = await fetch(`/api/cases/${caseId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(submitData),
       });
 
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
       const data = await response.json();
 
       if (data.success) {
         alert('Case updated successfully');
-        router.push(`/dashboard/cases/${params.id}`);
+        router.push(`/dashboard/cases/${caseId}`);
       } else {
         alert(data.error || 'Failed to update case');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating case:', error);
-      alert('An error occurred while updating the case');
+      alert(error.message || 'An error occurred while updating the case');
     } finally {
       setLoading(false);
     }
@@ -166,9 +233,36 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
     );
   }
 
-  const permissions = getCasePermissions(session?.user.role || 'PUBLIC', session?.user.id || '', caseData);
+  // Get user from session with proper typing
+  const user = session?.user as SessionUser | undefined;
+  
+  // Create a user object that EXACTLY matches what getCasePermissions expects
+  const permissionsUser: SessionUser = user ? {
+    id: user.id,
+    email: user.email || '',
+    name: user.name || '',
+    role: user.role as UserRole,
+    stationId: user.stationId,
+    badgeNumber: user.badgeNumber,
+  } : {
+    id: '',
+    email: '',
+    name: '',
+    role: 'OFFICER' as UserRole,
+    stationId: undefined,
+    badgeNumber: undefined,
+  };
 
-  if (!permissions.canEdit) {
+  // Now call getCasePermissions with the correctly typed user object
+  const permissions = getCasePermissions(permissionsUser, caseData);
+
+  // Add case-specific permission check
+  const canEditCase = permissions.canEdit && 
+    (caseData.createdById === user?.id || 
+     ['SUPER_ADMIN', 'ADMIN', 'STATION_COMMANDER', 'OCS'].includes(user?.role || '') ||
+     caseData.assignedToId === user?.id);
+
+  if (!canEditCase) {
     return (
       <div className="text-center py-12">
         <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
@@ -179,8 +273,8 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
           You do not have permission to edit this case.
         </p>
         <button
-          onClick={() => router.push(`/dashboard/cases/${params.id}`)}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
+          onClick={() => router.push(`/dashboard/cases/${caseId}`)}
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
         >
           Back to Case
         </button>
@@ -189,12 +283,13 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="max-w-4xl mx-auto space-y-6 p-4">
       {/* Header */}
       <div className="flex items-center gap-4">
         <button
           onClick={() => router.back()}
           className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+          aria-label="Go back"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
@@ -212,18 +307,20 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
       <form onSubmit={handleSubmit} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 space-y-6">
         {/* Case Title */}
         <div>
-          <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+          <label htmlFor="title" className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
             Case Title *
           </label>
           <input
+            id="title"
             type="text"
             value={formData.title}
             onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-            className={`w-full px-4 py-2 border ${errors.title ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'} rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500`}
+            className={`w-full px-4 py-2 border ${errors.title ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'} rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors`}
+            placeholder="Enter case title"
           />
           {errors.title && (
             <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
-              <AlertCircle className="w-4 h-4" />
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
               {errors.title}
             </p>
           )}
@@ -233,14 +330,16 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Status */}
           <div>
-            <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+            <label htmlFor="status" className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
               Status *
             </label>
             <select
+              id="status"
               value={formData.status}
               onChange={(e) => setFormData({ ...formData, status: e.target.value as CaseStatus })}
-              className={`w-full px-4 py-2 border ${errors.status ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'} rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500`}
+              className={`w-full px-4 py-2 border ${errors.status ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'} rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors`}
             >
+              <option value="">Select Status</option>
               <option value="OPEN">Open</option>
               <option value="UNDER_INVESTIGATION">Under Investigation</option>
               <option value="PENDING_TRIAL">Pending Trial</option>
@@ -250,7 +349,7 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
             </select>
             {errors.status && (
               <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
-                <AlertCircle className="w-4 h-4" />
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
                 {errors.status}
               </p>
             )}
@@ -258,19 +357,26 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
 
           {/* Priority */}
           <div>
-            <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+            <label htmlFor="priority" className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
               Priority
             </label>
             <select
+              id="priority"
               value={formData.priority}
-              onChange={(e) => setFormData({ ...formData, priority: e.target.value })}
-              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+              onChange={(e) => setFormData({ ...formData, priority: e.target.value as Priority })}
+              className={`w-full px-4 py-2 border ${errors.priority ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'} rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors`}
             >
               <option value="LOW">Low</option>
               <option value="MEDIUM">Medium</option>
               <option value="HIGH">High</option>
               <option value="CRITICAL">Critical</option>
             </select>
+            {errors.priority && (
+              <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                {errors.priority}
+              </p>
+            )}
           </div>
         </div>
 
@@ -283,7 +389,7 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
             type="text"
             value={formData.category}
             disabled
-            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400"
+            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed"
           />
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
             Category cannot be changed after case creation
@@ -292,18 +398,20 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
 
         {/* Description */}
         <div>
-          <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+          <label htmlFor="description" className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
             Description *
           </label>
           <textarea
+            id="description"
             value={formData.description}
             onChange={(e) => setFormData({ ...formData, description: e.target.value })}
             rows={6}
-            className={`w-full px-4 py-2 border ${errors.description ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'} rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500`}
+            className={`w-full px-4 py-2 border ${errors.description ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'} rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors`}
+            placeholder="Enter detailed case description..."
           />
           {errors.description && (
             <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
-              <AlertCircle className="w-4 h-4" />
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
               {errors.description}
             </p>
           )}
@@ -312,13 +420,14 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
         {/* Assigned Officer */}
         {permissions.canAssign && (
           <div>
-            <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+            <label htmlFor="assignedTo" className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
               Assigned Officer
             </label>
             <select
+              id="assignedTo"
               value={formData.assignedToId}
               onChange={(e) => setFormData({ ...formData, assignedToId: e.target.value })}
-              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
             >
               <option value="">Not assigned</option>
               {officers.map((officer) => (
@@ -339,26 +448,34 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+                <label htmlFor="courtDate" className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
                   Court Date
                 </label>
                 <input
+                  id="courtDate"
                   type="date"
                   value={formData.courtDate}
                   onChange={(e) => setFormData({ ...formData, courtDate: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+                  className={`w-full px-4 py-2 border ${errors.courtDate ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'} rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors`}
                 />
+                {errors.courtDate && (
+                  <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    {errors.courtDate}
+                  </p>
+                )}
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+                <label htmlFor="courtCase" className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
                   Court Case Number
                 </label>
                 <input
+                  id="courtCase"
                   type="text"
                   value={formData.courtCase}
                   onChange={(e) => setFormData({ ...formData, courtCase: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
                   placeholder="e.g., CR-2024-12345"
                 />
               </div>
@@ -369,15 +486,16 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
         {/* Outcome */}
         {(formData.status === 'CLOSED' || formData.status === 'DISMISSED') && (
           <div>
-            <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+            <label htmlFor="outcome" className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
               Outcome
             </label>
             <textarea
+              id="outcome"
               value={formData.outcome}
               onChange={(e) => setFormData({ ...formData, outcome: e.target.value })}
               rows={4}
-              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
-              placeholder="Describe the final outcome of the case"
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
+              placeholder="Describe the final outcome of the case..."
             />
           </div>
         )}
@@ -387,7 +505,8 @@ export default function EditCasePage({ params }: { params: { id: string } }) {
           <button
             type="button"
             onClick={() => router.back()}
-            className="px-6 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+            className="px-6 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={loading}
           >
             Cancel
           </button>
