@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
@@ -16,7 +16,10 @@
     "db:generate": "prisma generate",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+
+    "postinstall": "prisma generate",
+    "vercel-build": "prisma generate && next build"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^3.0.4",
@@ -81,5 +84,9 @@
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
+  },
+
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

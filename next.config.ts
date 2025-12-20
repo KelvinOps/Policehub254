@@ -1,12 +1,8 @@
-// next.config.ts
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
-  
-  // Add these options to handle network issues
-  optimizeFonts: false, // Disable font optimization
   
   eslint: {
     ignoreDuringBuilds: true,
@@ -26,12 +22,24 @@ const nextConfig: NextConfig = {
         protocol: 'https',
         hostname: 'res.cloudinary.com',
       },
+      {
+        protocol: 'https',
+        hostname: '**',
+      },
     ],
     formats: ['image/avif', 'image/webp'],
   },
 
   experimental: {
     optimizePackageImports: ['lucide-react'],
+  },
+  
+  // Add webpack config for Prisma
+  webpack: (config, { isServer }) => {
+    if (isServer) {
+      config.externals.push('@prisma/client');
+    }
+    return config;
   },
 };
 
