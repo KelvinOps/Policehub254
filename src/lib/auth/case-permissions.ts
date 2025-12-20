@@ -1,4 +1,4 @@
-import { UserRole } from '@prisma/client';
+import { UserRole, IncidentCategory } from '@prisma/client';
 import { Case, SessionUser } from '@/types/case';
 
 export interface CasePermissions {
@@ -90,7 +90,7 @@ export function getCasePermissions(
         canLinkCriminals: isSameStation,
         canCloseCase: isSameStation,
         canReopenCase: isSameStation,
-        canAccessAllCases: false, // Only within their station
+        canAccessAllCases: false,
       };
 
     case UserRole.OCS:
@@ -126,7 +126,7 @@ export function getCasePermissions(
       };
 
     case UserRole.TRAFFIC_OFFICER:
-      const isTrafficCase = caseData?.category === 'TRAFFIC_ACCIDENT';
+      const isTrafficCase = caseData?.category === IncidentCategory.TRAFFIC_ACCIDENT;
       return {
         ...baseOfficerPermissions,
         canEdit: isInvolved && isSameStation && isTrafficCase,
@@ -135,9 +135,10 @@ export function getCasePermissions(
       };
 
     case UserRole.GBV_OFFICER:
-      const isGBVCase = caseData?.category === 'RAPE' || 
-                       caseData?.category === 'DOMESTIC_VIOLENCE' ||
-                       caseData?.category === 'SEXUAL_HARASSMENT';
+      // Only RAPE and DOMESTIC_VIOLENCE exist in your schema
+      const isGBVCase = caseData?.category === IncidentCategory.RAPE || 
+                       caseData?.category === IncidentCategory.DOMESTIC_VIOLENCE;
+      
       return {
         ...baseOfficerPermissions,
         canEdit: isInvolved && isSameStation && isGBVCase,

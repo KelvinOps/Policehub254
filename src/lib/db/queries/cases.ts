@@ -1,8 +1,22 @@
-// src/lib/db/queries/cases.ts
-
 import { prisma } from '../prisma';
 import { CaseStatus, IncidentCategory } from '@prisma/client';
 import { CaseFilters } from '@/types/case';
+
+// Define a type for criminal in case
+interface CaseCriminal {
+  id: string;
+  firstName: string;
+  lastName: string;
+  middleName?: string;
+  idNumber?: string;
+  photoUrl?: string;
+  isWanted?: boolean;
+}
+
+// Extend the return type of getCaseById
+export type CaseWithRelations = Awaited<ReturnType<typeof prisma.case.findUnique>> & {
+  criminals?: CaseCriminal[];
+};
 
 export async function createCase(data: {
   title: string;
@@ -47,7 +61,7 @@ export async function createCase(data: {
       assignedToId: data.assignedToId,
     },
     include: {
-      station: true,
+      Station: true, // Uppercase S to match schema
       assignedTo: {
         select: {
           id: true,
@@ -92,7 +106,7 @@ export async function getCases(filters: CaseFilters = {}) {
   return await prisma.case.findMany({
     where,
     include: {
-      station: {
+      Station: { // Uppercase S to match schema
         select: {
           id: true,
           name: true,
@@ -143,11 +157,11 @@ export async function getCases(filters: CaseFilters = {}) {
   });
 }
 
-export async function getCaseById(id: string) {
+export async function getCaseById(id: string): Promise<CaseWithRelations | null> {
   return await prisma.case.findUnique({
     where: { id },
     include: {
-      station: true,
+      Station: true, // Uppercase S to match schema
       assignedTo: {
         select: {
           id: true,
@@ -225,7 +239,7 @@ export async function updateCase(id: string, data: {
     where: { id },
     data: updateData,
     include: {
-      station: true,
+      Station: true, // Uppercase S to match schema
       assignedTo: true,
       createdBy: true,
       criminals: true,

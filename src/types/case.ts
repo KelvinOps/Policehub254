@@ -1,4 +1,16 @@
+// src/types/case.ts
 import { CaseStatus, IncidentCategory, UserRole } from '@prisma/client';
+
+// Update SessionUser interface to match the one in session.ts
+export interface SessionUser {
+  id: string;
+  email: string;
+  role: UserRole;
+  stationId?: string;
+  badgeNumber?: string;
+  // Remove the required 'name' property since session.ts doesn't have it
+  // name: string; // REMOVE THIS LINE
+}
 
 export interface Case {
   id: string;
@@ -23,8 +35,8 @@ export interface Case {
   createdAt: Date;
   updatedAt: Date;
   
-  // Related data
-  station?: {
+  // Related data - Update to match Prisma schema
+  Station?: { // Uppercase S to match Prisma
     id: string;
     name: string;
     code: string;
@@ -135,13 +147,4 @@ export interface CaseStatistics {
   byCategory: Record<string, number>;
   avgResolutionTime: number;
   convictionRate: number;
-}
-
-export interface SessionUser {
-  id: string;
-  email: string;
-  name: string;
-  role: UserRole;
-  stationId?: string;
-  badgeNumber?: string;
 }

@@ -1,5 +1,3 @@
-// src/lib/auth/session.ts
-
 import { NextRequest } from 'next/server';
 import jwt from 'jsonwebtoken';
 import { UserRole } from '@prisma/client';
@@ -12,6 +10,8 @@ export interface SessionUser {
   role: UserRole;
   stationId?: string;
   badgeNumber?: string;
+  // Add name if you want to include it, but make it optional
+  name?: string;
 }
 
 export interface JWTPayload extends SessionUser {
@@ -25,18 +25,23 @@ export interface JWTPayload extends SessionUser {
  */
 export function getUserFromHeaders(request: NextRequest): SessionUser | null {
   const userId = request.headers.get('x-user-id');
+  const userEmail = request.headers.get('x-user-email');
   const userRole = request.headers.get('x-user-role');
   const userStation = request.headers.get('x-user-station');
+  const userName = request.headers.get('x-user-name');
+  const userBadge = request.headers.get('x-user-badge');
 
-  if (!userId || !userRole) {
+  if (!userId || !userRole || !userEmail) {
     return null;
   }
 
   return {
     id: userId,
-    email: '', // Not available in headers
+    email: userEmail,
     role: userRole as UserRole,
     stationId: userStation || undefined,
+    badgeNumber: userBadge || undefined,
+    name: userName || undefined,
   };
 }
 
@@ -59,6 +64,7 @@ export function getUserFromToken(request: NextRequest): SessionUser | null {
       role: decoded.role,
       stationId: decoded.stationId,
       badgeNumber: decoded.badgeNumber,
+      name: decoded.name,
     };
   } catch (error) {
     console.error('Token verification failed:', error);

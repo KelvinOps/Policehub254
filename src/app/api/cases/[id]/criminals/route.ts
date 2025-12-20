@@ -1,16 +1,22 @@
-// src/app/api/cases/[id]/criminals/route.ts
-
 import { NextRequest, NextResponse } from 'next/server';
 import { linkCriminalToCase, unlinkCriminalFromCase, getCaseById } from '@/lib/db/queries/cases';
 import { getSession } from '@/lib/auth/session';
 import { getCasePermissions } from '@/lib/auth/case-permissions';
 import { prisma } from '@/lib/db/prisma';
 
+// Type for params in Next.js 15
+interface RouteParams {
+  params: Promise<{ id: string }>;
+}
+
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  context: RouteParams
 ) {
   try {
+    // Await the params for Next.js 15
+    const { id } = await context.params;
+    
     const user = getSession(request);
     
     if (!user) {
@@ -23,14 +29,14 @@ export async function POST(
     const body = await request.json();
     const { criminalId } = body;
 
-    if (!criminalId) {
+    if (!criminalId || typeof criminalId !== 'string') {
       return NextResponse.json(
-        { success: false, error: 'Criminal ID is required' },
+        { success: false, error: 'Valid Criminal ID is required' },
         { status: 400 }
       );
     }
 
-    const caseData = await getCaseById(params.id);
+    const caseData = await getCaseById(id);
 
     if (!caseData) {
       return NextResponse.json(
@@ -38,6 +44,9 @@ export async function POST(
         { status: 404 }
       );
     }
+
+    // Type assertion to include criminals
+    const caseWithCriminals = caseData as typeof caseData & { criminals?: Array<{ id: string }> };
 
     const permissions = getCasePermissions(user, caseData);
 
@@ -60,8 +69,8 @@ export async function POST(
       );
     }
 
-    // Check if already linked
-    const existingLink = caseData.criminals?.find(c => c.id === criminalId);
+    // Check if already linked - with proper type
+    const existingLink = caseWithCriminals.criminals?.find((c: { id: string }) => c.id === criminalId);
     if (existingLink) {
       return NextResponse.json(
         { success: false, error: 'Criminal is already linked to this case' },
@@ -69,7 +78,7 @@ export async function POST(
       );
     }
 
-    const updatedCase = await linkCriminalToCase(params.id, criminalId);
+    const updatedCase = await linkCriminalToCase(id, criminalId);
 
     // Create audit log
     await prisma.auditLog.create({
@@ -77,13 +86,13 @@ export async function POST(
         userId: user.id,
         action: 'LINK',
         entity: 'Case-Criminal',
-        entityId: params.id,
+        entityId: id,
         changes: {
           criminalId,
           criminalName: `${criminal.firstName} ${criminal.lastName}`,
         },
-        ipAddress: request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip'),
-        userAgent: request.headers.get('user-agent'),
+        ipAddress: request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown',
+        userAgent: request.headers.get('user-agent') || 'unknown',
       },
     });
 
@@ -95,7 +104,7 @@ export async function POST(
   } catch (error: any) {
     console.error('Error linking criminal to case:', error);
     return NextResponse.json(
-      { success: false, error: error.message },
+      { success: false, error: error.message || 'Internal server error' },
       { status: 500 }
     );
   }
@@ -103,9 +112,12 @@ export async function POST(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  context: RouteParams
 ) {
   try {
+    // Await the params for Next.js 15
+    const { id } = await context.params;
+    
     const user = getSession(request);
     
     if (!user) {
@@ -125,7 +137,7 @@ export async function DELETE(
       );
     }
 
-    const caseData = await getCaseById(params.id);
+    const caseData = await getCaseById(id);
 
     if (!caseData) {
       return NextResponse.json(
@@ -143,7 +155,7 @@ export async function DELETE(
       );
     }
 
-    const updatedCase = await unlinkCriminalFromCase(params.id, criminalId);
+    const updatedCase = await unlinkCriminalFromCase(id, criminalId);
 
     // Create audit log
     await prisma.auditLog.create({
@@ -151,13 +163,13 @@ export async function DELETE(
         userId: user.id,
         action: 'UNLINK',
         entity: 'Case-Criminal',
-        entityId: params.id,
+        entityId: id,
         changes: {
           criminalId,
           action: 'removed',
         },
-        ipAddress: request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip'),
-        userAgent: request.headers.get('user-agent'),
+        ipAddress: request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown',
+        userAgent: request.headers.get('user-agent') || 'unknown',
       },
     });
 
@@ -169,7 +181,7 @@ export async function DELETE(
   } catch (error: any) {
     console.error('Error unlinking criminal from case:', error);
     return NextResponse.json(
-      { success: false, error: error.message },
+      { success: false, error: error.message || 'Internal server error' },
       { status: 500 }
     );
   }
