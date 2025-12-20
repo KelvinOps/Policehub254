@@ -1,21 +1,6 @@
-//app/layout.tsx
-
+// src/app/layout.tsx
 import type { Metadata } from "next";
-import { Inter, Poppins } from "next/font/google";
-import "./globals.css";
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-  display: "swap",
-});
-
-const poppins = Poppins({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
-  variable: "--font-poppins",
-  display: "swap",
-});
+import "./globals.css"; // Keep this import
 
 export const metadata: Metadata = {
   title: {
@@ -87,9 +72,7 @@ export default function RootLayout({
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
         <meta name="theme-color" content="#003f87" />
       </head>
-      <body
-        className={`${inter.variable} ${poppins.variable} antialiased min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900`}
-      >
+      <body className="antialiased min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
         {children}
       </body>
     </html>
