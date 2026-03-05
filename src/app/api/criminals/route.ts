@@ -1,38 +1,32 @@
-// src/app/api/criminals/route.ts - LIST ROUTE (NOT DETAIL)
+// src/app/api/criminals/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
-
 const prisma = new PrismaClient();
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    
     console.log('Received criminal data:', body);
-
-    // Get user ID from headers (set by middleware)
     const userId = request.headers.get('x-user-id') || 'SYSTEM';
 
-    // Validate required fields
     if (!body.firstName || !body.lastName || !body.gender || !body.stationId) {
       return NextResponse.json(
-        { 
-          success: false, 
+        {
+          success: false,
           error: 'Missing required fields',
           details: {
             firstName: !body.firstName,
             lastName: !body.lastName,
             gender: !body.gender,
-            stationId: !body.stationId
-          }
+            stationId: !body.stationId,
+          },
         },
         { status: 400 }
       );
     }
 
-    // Verify station exists
     const stationExists = await prisma.station.findUnique({
-      where: { id: body.stationId }
+      where: { id: body.stationId },
     });
 
     if (!stationExists) {
@@ -42,7 +36,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Prepare the data object
     const criminalData: any = {
       firstName: body.firstName.trim(),
       lastName: body.lastName.trim(),
@@ -52,7 +45,6 @@ export async function POST(request: NextRequest) {
       isWanted: Boolean(body.isWanted),
     };
 
-    // Add optional fields only if they exist
     if (body.middleName) criminalData.middleName = body.middleName.trim();
     if (body.alias && Array.isArray(body.alias)) criminalData.alias = body.alias;
     if (body.dateOfBirth) criminalData.dateOfBirth = new Date(body.dateOfBirth);
@@ -66,13 +58,10 @@ export async function POST(request: NextRequest) {
       criminalData.criminalHistory = body.criminalHistory;
     }
 
-    console.log('Prepared criminal data:', criminalData);
-
-    // Create criminal record
     const criminal = await prisma.criminal.create({
       data: criminalData,
       include: {
-        station: {
+        Station: {
           select: {
             name: true,
             code: true,
@@ -81,10 +70,8 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Create evidence items if provided
     if (body.evidenceItems && Array.isArray(body.evidenceItems) && body.evidenceItems.length > 0) {
       console.log('Creating evidence items:', body.evidenceItems.length);
-      
       const evidenceData = body.evidenceItems.map((item: any) => ({
         criminalId: criminal.id,
         type: item.type || 'OTHER',
@@ -96,60 +83,54 @@ export async function POST(request: NextRequest) {
         mimeType: item.mimeType || null,
         uploadedBy: userId,
       }));
-
-      await prisma.criminalEvidence.createMany({
-        data: evidenceData,
-      });
-
+      await prisma.criminalEvidence.createMany({ data: evidenceData });
       console.log('Evidence items created successfully');
     }
 
-    // Fetch the complete criminal record with evidence
     const completeCriminal = await prisma.criminal.findUnique({
       where: { id: criminal.id },
       include: {
-        station: {
+        Station: {
           select: {
             name: true,
             code: true,
           },
         },
-        evidenceItems: {
-          orderBy: {
-            createdAt: 'desc',
-          },
+        CriminalEvidence: {
+          orderBy: { createdAt: 'desc' },
         },
       },
     });
 
+    // ── NEW: compute fingerprintCount from already-fetched evidence ──
+    const fingerprintCount =
+      completeCriminal?.CriminalEvidence.filter((e) => e.type === 'FINGERPRINT').length ?? 0;
+
     return NextResponse.json(
       {
         success: true,
-        data: completeCriminal,
+        data: { ...completeCriminal, fingerprintCount },
         message: 'Criminal record created successfully',
       },
       { status: 201 }
     );
   } catch (error: any) {
     console.error('Error creating criminal:', error);
-    
-    // Check for unique constraint violations
     if (error.code === 'P2002') {
       return NextResponse.json(
-        { 
-          success: false, 
+        {
+          success: false,
           error: 'A record with this ID number already exists',
-          details: error.meta
+          details: error.meta,
         },
         { status: 400 }
       );
     }
-    
     return NextResponse.json(
-      { 
-        success: false, 
+      {
+        success: false,
         error: 'Failed to create criminal record',
-        details: error.message 
+        details: error.message,
       },
       { status: 500 }
     );
@@ -165,20 +146,10 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get('limit') || '10');
     const search = searchParams.get('search') || '';
     const wanted = searchParams.get('wanted');
-
-    console.log('GET /api/criminals - Params:', {
-      page,
-      limit,
-      search,
-      wanted,
-    });
-
     const skip = (page - 1) * limit;
 
-    // Build where clause
     const where: any = {};
 
-    // Search filter
     if (search) {
       where.OR = [
         { firstName: { contains: search, mode: 'insensitive' } },
@@ -188,27 +159,17 @@ export async function GET(request: NextRequest) {
       ];
     }
 
-    // Wanted filter - FIXED: Only apply if explicitly set to 'true' or 'false'
-    if (wanted === 'true') {
-      where.isWanted = true;
-      console.log('Filtering for WANTED criminals only');
-    } else if (wanted === 'false') {
-      where.isWanted = false;
-      console.log('Filtering for NOT WANTED criminals only');
-    }
+    if (wanted === 'true') where.isWanted = true;
+    else if (wanted === 'false') where.isWanted = false;
 
-    console.log('Where clause:', JSON.stringify(where, null, 2));
-
-    // Get total count
     const total = await prisma.criminal.count({ where });
 
-    // Get criminals with pagination
     const criminals = await prisma.criminal.findMany({
       where,
       skip,
       take: limit,
       include: {
-        station: {
+        Station: {
           select: {
             id: true,
             name: true,
@@ -224,20 +185,23 @@ export async function GET(request: NextRequest) {
             status: true,
           },
         },
-        evidenceItems: {
-          orderBy: {
-            createdAt: 'desc',
-          },
+        CriminalEvidence: {
+          orderBy: { createdAt: 'desc' },
         },
       },
-      orderBy: {
-        createdAt: 'desc',
-      },
+      orderBy: { createdAt: 'desc' },
     });
+
+    // ── NEW: compute fingerprintCount per criminal from already-fetched evidence
+    //        (no extra DB round-trip needed)
+    const criminalsWithFpCount = criminals.map((c) => ({
+      ...c,
+      fingerprintCount: c.CriminalEvidence.filter((e) => e.type === 'FINGERPRINT').length,
+    }));
 
     return NextResponse.json({
       success: true,
-      data: criminals,
+      data: criminalsWithFpCount,
       pagination: {
         total,
         page,

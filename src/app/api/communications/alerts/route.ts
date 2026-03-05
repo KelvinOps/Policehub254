@@ -1,416 +1,292 @@
-// ============================================
-// FILE: src/app/api/communications/alerts/route.ts
-// Complete Alert system with acknowledgments
-// ============================================
+// app/api/communications/alerts/route.ts
 
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db/prisma';
-import { AlertType, AlertPriority } from '@prisma/client';
+import { NextRequest, NextResponse } from "next/server";
+import { getSession, isStationLeadership } from "@/lib/auth/session";
+import { prisma } from "@/lib/db/prisma";
+import { AlertType, AlertPriority, UserRole } from "@prisma/client";
 
-export async function GET(request: NextRequest) {
+// Roles that may create/manage alerts
+const ALERT_MANAGER_ROLES: UserRole[] = [
+  UserRole.SUPER_ADMIN,
+  UserRole.ADMIN,
+  UserRole.STATION_COMMANDER,
+  UserRole.OCS,
+  UserRole.DETECTIVE,
+];
+
+export async function GET(req: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id');
-    const userRole = request.headers.get('x-user-role');
-    const stationId = request.headers.get('x-user-station');
-
-    if (!userId) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
+    const user = getSession(req);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Determine alert visibility based on role and scope
-    const canSeeAll = ['SUPER_ADMIN', 'ADMIN'].includes(userRole || '');
-    
-    // Build where conditions based on scope
-    let whereConditions: any = {
-      isActive: true, // Only show active alerts by default
+    const { searchParams } = new URL(req.url);
+    const typeFilter = searchParams.get("type") ?? "ALL";
+    const priorityFilter = searchParams.get("priority") ?? "ALL";
+    const activeFilter = searchParams.get("active") ?? "ALL";
+    const search = searchParams.get("search") ?? "";
+    const page = Math.max(1, parseInt(searchParams.get("page") ?? "1", 10));
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") ?? "50", 10)));
+
+    // ── Scope: admins see everything; others see station + national + role-targeted ──
+    const isGlobalAdmin =
+      user.role === UserRole.SUPER_ADMIN || user.role === UserRole.ADMIN;
+
+    const scopeWhere = isGlobalAdmin
+      ? {}
+      : {
+          OR: [
+            { scope: "NATIONAL" },
+            { stationId: user.stationId ?? "__none__" },
+            // Alerts targeting the user's role explicitly
+            { targetRoles: { has: user.role } },
+            // Alerts with no specific roles (broadcast to everyone)
+            { targetRoles: { isEmpty: true } },
+          ],
+        };
+
+    // ── Filters ──────────────────────────────────────────────────────────────
+    const typeWhere =
+      typeFilter !== "ALL"
+        ? { type: typeFilter as AlertType }
+        : {};
+
+    const priorityWhere =
+      priorityFilter !== "ALL"
+        ? { priority: priorityFilter as AlertPriority }
+        : {};
+
+    const activeWhere =
+      activeFilter === "ACTIVE"
+        ? { isActive: true }
+        : activeFilter === "INACTIVE"
+        ? { isActive: false }
+        : {};
+
+    const searchWhere = search.trim()
+      ? {
+          OR: [
+            { title: { contains: search, mode: "insensitive" as const } },
+            { message: { contains: search, mode: "insensitive" as const } },
+          ],
+        }
+      : {};
+
+    const where = {
+      ...scopeWhere,
+      ...typeWhere,
+      ...priorityWhere,
+      ...activeWhere,
+      ...searchWhere,
     };
 
-    if (!canSeeAll) {
-      whereConditions = {
-        ...whereConditions,
-        OR: [
-          { scope: 'NATIONAL' },
-          { scope: 'COUNTY', stationId: { in: [stationId] } },
-          { scope: 'STATION', stationId: stationId },
+    const now = new Date();
+
+    const [alerts, total] = await Promise.all([
+      prisma.alert.findMany({
+        where,
+        include: {
+          // createdBy relation name from schema: "CreatedAlerts"
+          createdBy: {
+            select: {
+              id: true,
+              name: true,
+              role: true,
+              badgeNumber: true,
+            },
+          },
+          // station relation name from schema: "StationAlerts"
+          station: {
+            select: { id: true, name: true, code: true },
+          },
+          // acknowledgments with nested user
+          acknowledgments: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  role: true,
+                  badgeNumber: true,
+                },
+              },
+            },
+            orderBy: { acknowledgedAt: "desc" },
+          },
+        },
+        orderBy: [
+          // Urgent first, then by creation date
+          { priority: "asc" },
+          { createdAt: "desc" },
         ],
-      };
-    }
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.alert.count({ where }),
+    ]);
 
-    // Check for query params
-    const url = new URL(request.url);
-    const includeInactive = url.searchParams.get('includeInactive') === 'true';
-    const alertType = url.searchParams.get('type');
-    const priority = url.searchParams.get('priority');
-
-    if (includeInactive) {
-      delete whereConditions.isActive;
-    }
-
-    if (alertType) {
-      whereConditions.type = alertType;
-    }
-
-    if (priority) {
-      whereConditions.priority = priority;
-    }
-
-    const alerts = await prisma.alert.findMany({
-      where: whereConditions,
-      include: {
-        createdBy: {
-          select: {
-            id: true,
-            name: true,
-            badgeNumber: true,
-            role: true,
-          },
-        },
-        station: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-            county: true,
-          },
-        },
-        acknowledgments: {
-          where: { userId },
-          select: {
-            id: true,
-            acknowledgedAt: true,
-            notes: true,
-          },
-        },
-        _count: {
-          select: {
-            acknowledgments: true,
-          },
-        },
-      },
-      orderBy: [
-        { priority: 'desc' },
-        { createdAt: 'desc' },
-      ],
-      take: 100,
-    });
-
-    const formattedAlerts = alerts.map(alert => ({
-      id: alert.id,
-      title: alert.title,
-      message: alert.message,
-      type: alert.type,
-      priority: alert.priority,
-      scope: alert.scope,
-      targetRoles: alert.targetRoles,
-      createdById: alert.createdById,
-      createdByName: alert.createdBy.name,
-      createdByBadge: alert.createdBy.badgeNumber || 'N/A',
-      createdByRole: alert.createdBy.role,
-      stationId: alert.stationId || '',
-      stationName: alert.station?.name || 'N/A',
-      stationCounty: alert.station?.county || 'N/A',
-      isActive: alert.isActive,
-      expiresAt: alert.expiresAt?.toISOString() || null,
-      metadata: alert.metadata,
-      attachments: alert.attachments,
-      acknowledgmentCount: alert._count.acknowledgments,
-      isAcknowledged: alert.acknowledgments.length > 0,
-      myAcknowledgment: alert.acknowledgments[0] || null,
-      createdAt: alert.createdAt.toISOString(),
-      updatedAt: alert.updatedAt.toISOString(),
+    // Attach acknowledgedByMe flag for the current user
+    const alertsWithFlag = alerts.map((a) => ({
+      ...a,
+      acknowledgedByMe: a.acknowledgments.some(
+        (ack) => ack.userId === user.id
+      ),
     }));
 
-    // Calculate statistics
-    const stats = {
-      total: formattedAlerts.length,
-      critical: formattedAlerts.filter(a => a.type === 'CRITICAL').length,
-      warnings: formattedAlerts.filter(a => a.type === 'WARNING').length,
-      apb: formattedAlerts.filter(a => a.type === 'APB').length,
-      acknowledged: formattedAlerts.filter(a => a.isAcknowledged).length,
-      pending: formattedAlerts.filter(a => !a.isAcknowledged).length,
-    };
+    // ── Stats (scoped to what the user can see) ───────────────────────────────
+    const [totalCount, activeCount, criticalCount, unacknowledgedCount] =
+      await Promise.all([
+        prisma.alert.count({ where: scopeWhere }),
+        prisma.alert.count({
+          where: {
+            ...scopeWhere,
+            isActive: true,
+            OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+          },
+        }),
+        prisma.alert.count({
+          where: {
+            ...scopeWhere,
+            isActive: true,
+            type: AlertType.CRITICAL,
+          },
+        }),
+        prisma.alert.count({
+          where: {
+            ...scopeWhere,
+            isActive: true,
+            acknowledgments: {
+              none: { userId: user.id },
+            },
+          },
+        }),
+      ]);
 
-    return NextResponse.json({
-      success: true,
-      alerts: formattedAlerts,
-      stats,
-    });
-  } catch (error) {
-    console.error('Error fetching alerts:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch alerts' },
+      {
+        alerts: JSON.parse(JSON.stringify(alertsWithFlag)),
+        total,
+        stats: {
+          total: totalCount,
+          active: activeCount,
+          critical: criticalCount,
+          unacknowledged: unacknowledgedCount,
+        },
+      },
+      { status: 200 }
+    );
+  } catch (error) {
+    console.error("[GET /api/communications/alerts]", error);
+    return NextResponse.json(
+      { error: "Failed to fetch alerts" },
       { status: 500 }
     );
   }
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id');
-    const userRole = request.headers.get('x-user-role');
-    const stationId = request.headers.get('x-user-station');
-
-    if (!userId) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
+    const user = getSession(req);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Check permissions to create alerts
-    const canCreateAlerts = ['SUPER_ADMIN', 'ADMIN', 'STATION_COMMANDER', 'OCS'].includes(userRole || '');
-
-    if (!canCreateAlerts) {
+    if (!ALERT_MANAGER_ROLES.includes(user.role as UserRole)) {
       return NextResponse.json(
-        { success: false, error: 'Insufficient permissions to create alerts' },
+        { error: "Insufficient permissions to create alerts" },
         { status: 403 }
       );
     }
 
-    const body = await request.json();
-    const {
-      title,
-      message,
-      type = 'INFO',
-      priority = 'MEDIUM',
-      scope = 'STATION',
-      targetRoles = [],
-      expiresAt = null,
-      metadata = null,
-      attachments = [],
-    } = body;
+    const body = await req.json();
+    const { title, message, type, priority, scope, targetRoles, stationId, expiresAt } =
+      body;
 
-    // Validation
-    if (!title || !message) {
+    if (!title?.trim() || !message?.trim() || !type || !priority || !scope) {
       return NextResponse.json(
-        { success: false, error: 'Title and message are required' },
+        {
+          error:
+            "title, message, type, priority, and scope are required",
+        },
         { status: 400 }
       );
     }
 
-    // Validate scope permissions
-    if (scope === 'NATIONAL' && !['SUPER_ADMIN', 'ADMIN'].includes(userRole || '')) {
+    // Validate enum values
+    if (!Object.values(AlertType).includes(type)) {
       return NextResponse.json(
-        { success: false, error: 'Only admins can create national alerts' },
-        { status: 403 }
-      );
-    }
-
-    if (scope === 'COUNTY' && !['SUPER_ADMIN', 'ADMIN', 'STATION_COMMANDER'].includes(userRole || '')) {
-      return NextResponse.json(
-        { success: false, error: 'Insufficient permissions for county-wide alerts' },
-        { status: 403 }
-      );
-    }
-
-    // For station scope, require stationId
-    if (scope === 'STATION' && !stationId) {
-      return NextResponse.json(
-        { success: false, error: 'Station required for station-scoped alerts' },
+        { error: `Invalid alert type. Must be one of: ${Object.values(AlertType).join(", ")}` },
         { status: 400 }
       );
     }
 
-    // Create alert
+    if (!Object.values(AlertPriority).includes(priority)) {
+      return NextResponse.json(
+        { error: `Invalid priority. Must be one of: ${Object.values(AlertPriority).join(", ")}` },
+        { status: 400 }
+      );
+    }
+
+    // Use the requester's station if no stationId provided and scope is STATION
+    const resolvedStationId =
+      stationId ?? (scope === "STATION" ? user.stationId : null);
+
     const alert = await prisma.alert.create({
       data: {
-        title,
-        message,
+        title: title.trim(),
+        message: message.trim(),
         type: type as AlertType,
         priority: priority as AlertPriority,
         scope,
-        targetRoles,
-        createdById: userId,
-        stationId: scope === 'STATION' ? stationId : null,
-        isActive: true,
+        targetRoles: Array.isArray(targetRoles) ? targetRoles : [],
+        createdById: user.id,
+        stationId: resolvedStationId ?? null,
         expiresAt: expiresAt ? new Date(expiresAt) : null,
-        metadata,
-        attachments,
-      },
-      include: {
-        createdBy: {
-          select: {
-            name: true,
-            badgeNumber: true,
-          },
-        },
-        station: {
-          select: {
-            name: true,
-            code: true,
-          },
-        },
+        isActive: true,
+        attachments: [],
       },
     });
 
-    // Create notifications for relevant users based on scope and targetRoles
-    // This is a background task - don't wait for it
-    createAlertNotifications(alert.id, scope, stationId || '', targetRoles).catch(err =>
-      console.error('Failed to create alert notifications:', err)
-    );
+    // ── Notify relevant users ─────────────────────────────────────────────────
+    const notifyWhere: Record<string, unknown> = {
+      isActive: true,
+      NOT: { id: user.id }, // don't notify self
+    };
 
-    // Audit log
-    await prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'CREATE',
-        entity: 'ALERT',
-        entityId: alert.id,
-        changes: {
-          title,
-          type,
-          priority,
-          scope,
-        },
-      },
-    }).catch(err => console.error('Failed to create audit log:', err));
-
-    return NextResponse.json({
-      success: true,
-      alert: {
-        id: alert.id,
-        title: alert.title,
-        type: alert.type,
-        priority: alert.priority,
-        scope: alert.scope,
-        createdAt: alert.createdAt.toISOString(),
-      },
-      message: 'Alert created successfully',
-    });
-  } catch (error) {
-    console.error('Error creating alert:', error);
-    return NextResponse.json(
-      { success: false, error: 'Failed to create alert' },
-      { status: 500 }
-    );
-  }
-}
-
-// Helper function to create notifications
-async function createAlertNotifications(
-  alertId: string,
-  scope: string,
-  stationId: string,
-  targetRoles: string[]
-) {
-  try {
-    let users;
-
-    if (scope === 'NATIONAL') {
-      users = await prisma.user.findMany({
-        where: {
-          isActive: true,
-          ...(targetRoles.length > 0 && { role: { in: targetRoles } }),
-        },
-        select: { id: true },
-      });
-    } else if (scope === 'STATION') {
-      users = await prisma.user.findMany({
-        where: {
-          isActive: true,
-          stationId,
-          ...(targetRoles.length > 0 && { role: { in: targetRoles } }),
-        },
-        select: { id: true },
-      });
-    } else if (scope === 'COUNTY') {
-      // Get all stations in the same county
-      const station = await prisma.station.findUnique({
-        where: { id: stationId },
-        select: { county: true },
-      });
-
-      if (station) {
-        users = await prisma.user.findMany({
-          where: {
-            isActive: true,
-            station: { county: station.county },
-            ...(targetRoles.length > 0 && { role: { in: targetRoles } }),
-          },
-          select: { id: true },
-        });
-      }
+    if (scope === "STATION" && resolvedStationId) {
+      notifyWhere.stationId = resolvedStationId;
     }
 
-    if (users && users.length > 0) {
+    if (Array.isArray(targetRoles) && targetRoles.length > 0) {
+      notifyWhere.role = { in: targetRoles };
+    }
+
+    const usersToNotify = await prisma.user.findMany({
+      where: notifyWhere,
+      select: { id: true },
+    });
+
+    if (usersToNotify.length > 0) {
       await prisma.notification.createMany({
-        data: users.map(user => ({
-          userId: user.id,
-          title: 'New Alert',
-          message: 'A new alert has been issued that requires your attention',
-          type: 'ALERT',
-          relatedId: alertId,
-          relatedType: 'ALERT',
-          actionUrl: `/communications/alerts`,
+        data: usersToNotify.map((u) => ({
+          userId: u.id,
+          title: `${type} Alert: ${title.trim().slice(0, 60)}`,
+          message: message.trim().slice(0, 200),
+          type: "ALERT",
+          relatedId: alert.id,
+          relatedType: "Alert",
+          actionUrl: `/dashboard/communications/alerts`,
         })),
+        skipDuplicates: true,
       });
     }
+
+    return NextResponse.json({ alert }, { status: 201 });
   } catch (error) {
-    console.error('Error creating alert notifications:', error);
-  }
-}
-
-export async function PATCH(request: NextRequest) {
-  try {
-    const userId = request.headers.get('x-user-id');
-    const userRole = request.headers.get('x-user-role');
-
-    if (!userId) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const canManageAlerts = ['SUPER_ADMIN', 'ADMIN', 'STATION_COMMANDER', 'OCS'].includes(userRole || '');
-
-    if (!canManageAlerts) {
-      return NextResponse.json(
-        { success: false, error: 'Insufficient permissions' },
-        { status: 403 }
-      );
-    }
-
-    const body = await request.json();
-    const { alertId, isActive, expiresAt } = body;
-
-    if (!alertId) {
-      return NextResponse.json(
-        { success: false, error: 'Alert ID is required' },
-        { status: 400 }
-      );
-    }
-
-    const alert = await prisma.alert.update({
-      where: { id: alertId },
-      data: {
-        isActive,
-        expiresAt: expiresAt ? new Date(expiresAt) : undefined,
-      },
-    });
-
-    // Audit log
-    await prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'UPDATE',
-        entity: 'ALERT',
-        entityId: alertId,
-        changes: { isActive },
-      },
-    }).catch(err => console.error('Failed to create audit log:', err));
-
-    return NextResponse.json({
-      success: true,
-      alert: { id: alert.id, isActive: alert.isActive },
-    });
-  } catch (error) {
-    console.error('Error updating alert:', error);
+    console.error("[POST /api/communications/alerts]", error);
     return NextResponse.json(
-      { success: false, error: 'Failed to update alert' },
+      { error: "Failed to create alert" },
       { status: 500 }
     );
   }

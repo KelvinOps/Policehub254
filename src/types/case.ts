@@ -5,11 +5,11 @@ import { CaseStatus, IncidentCategory, UserRole } from '@prisma/client';
 export interface SessionUser {
   id: string;
   email: string;
+  name?: string; 
   role: UserRole;
   stationId?: string;
   badgeNumber?: string;
-  // Remove the required 'name' property since session.ts doesn't have it
-  // name: string; // REMOVE THIS LINE
+
 }
 
 export interface Case {

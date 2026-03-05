@@ -1,4 +1,4 @@
-// src/app/(dashboard)/dashboard/criminals/page.tsx - UPDATED
+// src/app/(dashboard)/dashboard/criminals/page.tsx
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
@@ -14,11 +14,23 @@ import {
   RefreshCw,
   Filter,
   X,
+  CheckCircle,
 } from 'lucide-react';
 import {
   getWantedStatusColor,
   getWantedStatusLabel,
 } from '@/lib/constants/criminal';
+
+interface CriminalEvidence {
+  id: string;
+  type: string;
+  title: string;
+  description?: string;
+  fileUrl: string;
+  fileName: string;
+  fileSize?: number;
+  mimeType?: string;
+}
 
 interface Criminal {
   id: string;
@@ -29,13 +41,21 @@ interface Criminal {
   gender: string;
   nationality: string;
   isWanted: boolean;
+  wantedReason?: string;
   phoneNumber?: string;
   photoUrl?: string;
-  station: {
+  Station: {
     name: string;
     code: string;
   };
-  cases: any[];
+  cases: {
+    id: string;
+    caseNumber: string;
+    title: string;
+    status: string;
+  }[];
+  CriminalEvidence: CriminalEvidence[];
+  fingerprintCount: number; // ← NEW: computed by API
   createdAt: string;
 }
 
@@ -45,6 +65,60 @@ interface PaginationData {
   limit: number;
   totalPages: number;
 }
+
+// ─── NEW: Fingerprint Status Cell ─────────────────────────────────────────────
+
+function FingerprintStatusCell({
+  count,
+  criminalId,
+}: {
+  count: number;
+  criminalId: string;
+}) {
+  const complete = count === 10;
+  const partial = count > 0 && count < 10;
+
+  return (
+    <Link
+      href={`/dashboard/criminals/${criminalId}/fingerprints`}
+      className="inline-flex items-center gap-1.5 group"
+      title={`${count}/10 fingerprints captured — click to manage`}
+    >
+      {/* Mini bar — 10 slots */}
+      <div className="flex gap-0.5">
+        {Array.from({ length: 10 }).map((_, i) => (
+          <div
+            key={i}
+            className={`w-1.5 h-4 rounded-sm transition-colors ${
+              i < count
+                ? complete
+                  ? 'bg-green-500'
+                  : 'bg-blue-500'
+                : 'bg-gray-200 dark:bg-gray-600'
+            }`}
+          />
+        ))}
+      </div>
+
+      {/* Badge */}
+      <span
+        className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium ${
+          complete
+            ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+            : partial
+            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+            : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+        }`}
+      >
+        {complete && <CheckCircle className="w-3 h-3" />}
+        {count === 0 && <AlertTriangle className="w-3 h-3" />}
+        {count}/10
+      </span>
+    </Link>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function CriminalsPage() {
   const router = useRouter();
@@ -60,7 +134,6 @@ export default function CriminalsPage() {
     totalPages: 0,
   });
 
-  // Initialize filter from URL params once on mount
   useEffect(() => {
     const wantedParam = searchParams.get('wanted');
     if (wantedParam === 'true') {
@@ -70,9 +143,8 @@ export default function CriminalsPage() {
     } else {
       setWantedFilter('all');
     }
-  }, []); // Empty dependency array - only run once on mount
+  }, []);
 
-  // Fetch criminals when filters or page changes
   const fetchCriminals = useCallback(async () => {
     try {
       setLoading(true);
@@ -81,22 +153,16 @@ export default function CriminalsPage() {
         limit: pagination.limit.toString(),
       });
 
-      // Add search term if present
       if (searchTerm.trim()) {
         params.append('search', searchTerm.trim());
       }
 
-      // Add wanted filter - Only add if not 'all'
       if (wantedFilter !== 'all') {
         params.append('wanted', wantedFilter);
       }
 
-      console.log('Fetching criminals with params:', params.toString());
-
       const response = await fetch(`/api/criminals?${params}`);
       const data = await response.json();
-
-      console.log('Received data:', data);
 
       if (data.success) {
         setCriminals(data.data);
@@ -111,7 +177,6 @@ export default function CriminalsPage() {
     }
   }, [pagination.page, searchTerm, wantedFilter]);
 
-  // Fetch data when dependencies change
   useEffect(() => {
     fetchCriminals();
   }, [fetchCriminals]);
@@ -148,11 +213,13 @@ export default function CriminalsPage() {
     setSearchTerm('');
     setWantedFilter('all');
     setPagination(prev => ({ ...prev, page: 1 }));
-    // Clear URL params
     router.push('/dashboard/criminals');
   };
 
   const hasActiveFilters = searchTerm.trim() || wantedFilter !== 'all';
+
+  // Whether we are in the dedicated wanted-persons view
+  const isWantedView = wantedFilter === 'true';
 
   return (
     <div className="space-y-6">
@@ -160,15 +227,14 @@ export default function CriminalsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-            Criminal Records
+            {isWantedView ? 'Wanted Persons' : 'Criminal Records'}
           </h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">
-            {wantedFilter === 'true' 
-              ? 'Viewing wanted persons only' 
+            {wantedFilter === 'true'
+              ? 'Showing all persons with active wanted status'
               : wantedFilter === 'false'
               ? 'Viewing non-wanted persons only'
-              : 'Manage criminal database and records'
-            }
+              : 'Manage criminal database and records'}
           </p>
         </div>
         <Link
@@ -214,7 +280,6 @@ export default function CriminalsPage() {
           </div>
         </div>
 
-        {/* Active Filters & Actions */}
         <div className="flex items-center justify-between mt-4 flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <button
@@ -237,7 +302,6 @@ export default function CriminalsPage() {
             )}
           </div>
 
-          {/* Active filter badges */}
           {hasActiveFilters && (
             <div className="flex items-center gap-2 flex-wrap">
               {searchTerm.trim() && (
@@ -248,7 +312,7 @@ export default function CriminalsPage() {
               )}
               {wantedFilter !== 'all' && (
                 <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm ${
-                  wantedFilter === 'true' 
+                  wantedFilter === 'true'
                     ? 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300'
                     : 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
                 }`}>
@@ -275,10 +339,9 @@ export default function CriminalsPage() {
               No criminal records found
             </p>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-              {hasActiveFilters 
+              {hasActiveFilters
                 ? 'Try adjusting your filters or search criteria'
-                : 'Start by registering a new criminal record'
-              }
+                : 'Start by registering a new criminal record'}
             </p>
             {hasActiveFilters ? (
               <button
@@ -313,14 +376,20 @@ export default function CriminalsPage() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                       Nationality
                     </th>
+                    {/* Status column — shows wanted/not-wanted badge normally,
+                        switches to "Wanted Reason" header in wanted-only view */}
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                      Status
+                      {isWantedView ? 'Wanted Reason' : 'Status'}
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                       Station
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                       Cases
+                    </th>
+                    {/* ── NEW column ── */}
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                      Fingerprints
                     </th>
                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                       Actions
@@ -366,33 +435,63 @@ export default function CriminalsPage() {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                         {criminal.nationality}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getWantedStatusColor(
-                            criminal.isWanted.toString()
-                          )}`}
-                        >
-                          {criminal.isWanted && (
-                            <AlertTriangle className="w-3 h-3 mr-1" />
-                          )}
-                          {getWantedStatusLabel(criminal.isWanted)}
-                        </span>
+
+                      {/* Status cell — badge in normal view, wanted reason in wanted-only view */}
+                      <td className="px-6 py-4">
+                        {isWantedView ? (
+                          <div className="flex items-start gap-2">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 whitespace-nowrap flex-shrink-0">
+                              <AlertTriangle className="w-3 h-3" />
+                              Wanted
+                            </span>
+                            {criminal.wantedReason ? (
+                              <p className="text-sm text-gray-700 dark:text-gray-300 line-clamp-2">
+                                {criminal.wantedReason}
+                              </p>
+                            ) : (
+                              <p className="text-sm text-gray-400 dark:text-gray-500 italic">
+                                No reason specified
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <span
+                            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getWantedStatusColor(
+                              criminal.isWanted.toString()
+                            )}`}
+                          >
+                            {criminal.isWanted && (
+                              <AlertTriangle className="w-3 h-3 mr-1" />
+                            )}
+                            {getWantedStatusLabel(criminal.isWanted)}
+                          </span>
+                        )}
                       </td>
+
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div>
                           <p className="text-sm text-gray-900 dark:text-white">
-                            {criminal.station.name}
+                            {criminal.Station?.name ?? '—'}
                           </p>
                           <p className="text-xs text-gray-500 dark:text-gray-400">
-                            {criminal.station.code}
+                            {criminal.Station?.code ?? ''}
                           </p>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                         <span className="inline-flex items-center justify-center w-6 h-6 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-full text-xs font-medium">
-                          {criminal.cases.length}
+                          {criminal.cases?.length ?? 0}
                         </span>
                       </td>
+
+                      {/* ── NEW: Fingerprints cell ── */}
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <FingerprintStatusCell
+                          count={criminal.fingerprintCount ?? 0}
+                          criminalId={criminal.id}
+                        />
+                      </td>
+
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         <div className="flex items-center justify-end gap-2">
                           <Link
@@ -428,15 +527,17 @@ export default function CriminalsPage() {
             <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex-wrap gap-3">
               <div className="flex items-center gap-2">
                 <p className="text-sm text-gray-700 dark:text-gray-300">
-                  Showing <span className="font-medium">{(pagination.page - 1) * pagination.limit + 1}</span> to{' '}
-                  <span className="font-medium">{Math.min(pagination.page * pagination.limit, pagination.total)}</span> of{' '}
+                  Showing{' '}
+                  <span className="font-medium">
+                    {pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1}
+                  </span>{' '}
+                  to{' '}
+                  <span className="font-medium">
+                    {Math.min(pagination.page * pagination.limit, pagination.total)}
+                  </span>{' '}
+                  of{' '}
                   <span className="font-medium">{pagination.total}</span> records
                 </p>
-                {wantedFilter === 'true' && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300">
-                    Wanted
-                  </span>
-                )}
               </div>
               <div className="flex items-center gap-2">
                 <button

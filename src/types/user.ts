@@ -1,4 +1,6 @@
-import { UserRole } from '@prisma/client'; // Changed from '@/lib/constants/roles'
+//src/types/user.ts
+
+import { UserRole } from '@prisma/client'; 
 
 export interface User {
   id: string;

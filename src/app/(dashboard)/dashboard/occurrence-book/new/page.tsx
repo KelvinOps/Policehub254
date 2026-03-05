@@ -1,4 +1,5 @@
-// src/app/(dashboard)/dashboard/occurrence-book/new/page.tsx
+//dashboard/occurrence-book/new/page.tsx
+
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -36,15 +37,23 @@ interface SuspectInfo {
   identifyingFeatures: string[];
 }
 
+const getLocalDateTimeString = (date?: Date): string => {
+  const d = date ?? new Date();
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  );
+};
+
 export default function NewOBEntryPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Form state
   const [formData, setFormData] = useState({
-    incidentDate: '',
+    incidentDate: getLocalDateTimeString(),
     category: '' as IncidentCategory,
     description: '',
     location: '',
@@ -59,30 +68,31 @@ export default function NewOBEntryPage() {
 
   useEffect(() => {
     const storedUser = localStorage.getItem('user');
-    console.log('Stored user:', storedUser);
-    
     if (storedUser) {
-      const parsedUser = JSON.parse(storedUser);
-      console.log('Parsed user:', parsedUser);
-      
-      if (!parsedUser.stationId && !['SUPER_ADMIN', 'ADMIN'].includes(parsedUser.role)) {
-        alert('Error: Your account has no assigned station. Please contact your administrator.');
+      try {
+        const parsedUser = JSON.parse(storedUser);
+        if (
+          !parsedUser.stationId &&
+          !['SUPER_ADMIN', 'ADMIN'].includes(parsedUser.role)
+        ) {
+          alert(
+            'Error: Your account has no assigned station. Please contact your administrator.'
+          );
+        }
+        setUser(parsedUser);
+      } catch {
+        alert('Session data is corrupted. Please log in again.');
+        router.push('/login');
       }
-      
-      setUser(parsedUser);
     } else {
       alert('No user found. Please log in again.');
       router.push('/login');
     }
-
-    // Set default incident date to now
-    const now = new Date();
-    const localDateTime = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
-      .toISOString()
-      .slice(0, 16);
-    setFormData((prev) => ({ ...prev, incidentDate: localDateTime }));
   }, [router]);
 
+  // ── Form helpers ──────────────────────────────────────────────────────────
+
+  // FIX: restored the missing opening `<` in the generic type
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
   ) => {
@@ -90,43 +100,40 @@ export default function NewOBEntryPage() {
     setFormData((prev) => ({ ...prev, [name]: value }));
     if (errors[name]) {
       setErrors((prev) => {
-        const newErrors = { ...prev };
-        delete newErrors[name];
-        return newErrors;
+        const next = { ...prev };
+        delete next[name];
+        return next;
       });
     }
   };
 
-  const addWitness = () => {
-    setWitnesses([
-      ...witnesses,
-      {
-        name: '',
-        contactNumber: '',
-        idNumber: '',
-        address: '',
-        statement: '',
-      },
-    ]);
-  };
+  // ── Witness helpers ───────────────────────────────────────────────────────
 
-  const removeWitness = (index: number) => {
-    setWitnesses(witnesses.filter((_, i) => i !== index));
-  };
+  const addWitness = () =>
+    setWitnesses((prev) => [
+      ...prev,
+      { name: '', contactNumber: '', idNumber: '', address: '', statement: '' },
+    ]);
+
+  const removeWitness = (index: number) =>
+    setWitnesses((prev) => prev.filter((_, i) => i !== index));
 
   const updateWitness = (
     index: number,
     field: keyof WitnessInfo,
     value: string
-  ) => {
-    const updated = [...witnesses];
-    updated[index][field] = value as never;
-    setWitnesses(updated);
-  };
+  ) =>
+    setWitnesses((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
 
-  const addSuspect = () => {
-    setSuspects([
-      ...suspects,
+  // ── Suspect helpers ───────────────────────────────────────────────────────
+
+  const addSuspect = () =>
+    setSuspects((prev) => [
+      ...prev,
       {
         name: '',
         alias: [],
@@ -136,62 +143,59 @@ export default function NewOBEntryPage() {
         identifyingFeatures: [],
       },
     ]);
-  };
 
-  const removeSuspect = (index: number) => {
-    setSuspects(suspects.filter((_, i) => i !== index));
-  };
+  const removeSuspect = (index: number) =>
+    setSuspects((prev) => prev.filter((_, i) => i !== index));
 
   const updateSuspect = (
     index: number,
     field: keyof SuspectInfo,
     value: string | string[]
-  ) => {
-    const updated = [...suspects];
-    updated[index][field] = value as never;
-    setSuspects(updated);
-  };
+  ) =>
+    setSuspects((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+
+  // ── GPS ───────────────────────────────────────────────────────────────────
 
   const getCurrentLocation = () => {
-    if ('geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setFormData((prev) => ({
-            ...prev,
-            latitude: position.coords.latitude.toString(),
-            longitude: position.coords.longitude.toString(),
-          }));
-        },
-        (error) => {
-          alert('Unable to get location: ' + error.message);
-        }
-      );
-    } else {
+    if (!('geolocation' in navigator)) {
       alert('Geolocation is not supported by your browser');
+      return;
     }
+    navigator.geolocation.getCurrentPosition(
+      (pos) =>
+        setFormData((prev) => ({
+          ...prev,
+          latitude: pos.coords.latitude.toString(),
+          longitude: pos.coords.longitude.toString(),
+        })),
+      (err) => alert('Unable to get location: ' + err.message)
+    );
   };
+
+  // ── Validation ────────────────────────────────────────────────────────────
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
 
-    if (!formData.incidentDate) {
+    if (!formData.incidentDate)
       newErrors.incidentDate = 'Incident date is required';
-    }
-    if (!formData.category) {
+    if (!formData.category)
       newErrors.category = 'Category is required';
-    }
-    if (!formData.description || formData.description.length < 20) {
+    if (!formData.description || formData.description.length < 20)
       newErrors.description = 'Description must be at least 20 characters';
-    }
-    if (!formData.location) {
+    if (!formData.location)
       newErrors.location = 'Location is required';
-    }
-    if (!formData.reportedBy) {
+    if (!formData.reportedBy)
       newErrors.reportedBy = 'Reporter name is required';
-    }
     if (!formData.contactNumber) {
       newErrors.contactNumber = 'Contact number is required';
-    } else if (!/^[0-9]{10}$/.test(formData.contactNumber.replace(/\s/g, ''))) {
+    } else if (
+      !/^[0-9]{10}$/.test(formData.contactNumber.replace(/\s/g, ''))
+    ) {
       newErrors.contactNumber = 'Contact number must be 10 digits';
     }
 
@@ -199,13 +203,11 @@ export default function NewOBEntryPage() {
     return Object.keys(newErrors).length === 0;
   };
 
+  // ── Submit ────────────────────────────────────────────────────────────────
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!validateForm()) {
-      return;
-    }
-
+    if (!validateForm()) return;
     if (!user) {
       alert('User not found. Please log in again.');
       router.push('/login');
@@ -213,92 +215,106 @@ export default function NewOBEntryPage() {
     }
 
     setLoading(true);
-
     try {
-      // FIXED: Don't send stationId and recordedById from client
-      // The API will get them from the authenticated user via getUserFromRequest()
       const payload = {
-        ...formData,
         incidentDate: new Date(formData.incidentDate).toISOString(),
+        category: formData.category,
+        description: formData.description,
+        location: formData.location,
         latitude: formData.latitude ? parseFloat(formData.latitude) : undefined,
-        longitude: formData.longitude ? parseFloat(formData.longitude) : undefined,
+        longitude: formData.longitude
+          ? parseFloat(formData.longitude)
+          : undefined,
+        reportedBy: formData.reportedBy,
+        contactNumber: formData.contactNumber,
         witnesses: witnesses.length > 0 ? witnesses : undefined,
         suspects: suspects.length > 0 ? suspects : undefined,
-        // Remove stationId and recordedById - API will get from token
       };
-
-      console.log('Submitting OB entry:', payload);
 
       const response = await fetch('/api/occurrence-book', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-        },
-        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
 
-      console.log('Response status:', response.status);
-      console.log('Response ok:', response.ok);
-
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Response error:', errorText);
-        throw new Error(`HTTP ${response.status}: ${errorText}`);
+        const errorData = await response
+          .json()
+          .catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || `HTTP ${response.status}`);
       }
 
       const data = await response.json();
-      console.log('API Response:', data);
-
       if (data.success) {
         alert('OB entry created successfully!');
         router.push('/dashboard/occurrence-book');
       } else {
-        console.error('Failed to create entry:', data.error);
         alert(data.error || 'Failed to create entry');
       }
     } catch (error) {
       console.error('Error creating entry:', error);
-      alert('An error occurred. Please try again.');
+      alert(
+        error instanceof Error
+          ? error.message
+          : 'An error occurred. Please try again.'
+      );
     } finally {
       setLoading(false);
     }
   };
 
+  // ── Shared input class helpers ────────────────────────────────────────────
+
+  const inputCls = (field: string) =>
+    `w-full px-4 py-3 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 ${
+      errors[field] ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+    }`;
+
+  const subInputCls =
+    'w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500';
+
+  const errorMsg = (field: string) =>
+    errors[field] ? (
+      <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
+        <AlertCircle className="w-4 h-4" />
+        {errors[field]}
+      </p>
+    ) : null;
+
+  // ─────────────────────────────────────────────────────────────────────────
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link
-            href="/dashboard/occurrence-book"
-            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-              New OB Entry
-            </h1>
-            <p className="text-gray-500 dark:text-gray-400 mt-1">
-              Record a new incident in the occurrence book
-            </p>
-          </div>
+      <div className="flex items-center gap-4">
+        <Link
+          href="/dashboard/occurrence-book"
+          className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+        >
+          <ArrowLeft className="w-5 h-5" />
+        </Link>
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+            New OB Entry
+          </h1>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">
+            Record a new incident in the occurrence book
+          </p>
         </div>
       </div>
 
-      {/* Show user info for debugging */}
+      {/* Logged-in user badge */}
       {user && (
         <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
           <p className="text-sm text-blue-800 dark:text-blue-200">
             <strong>Logged in as:</strong> {user.name} ({user.role})
-            {user.stationName && ` - ${user.stationName}`}
+            {user.stationName && ` — ${user.stationName}`}
           </p>
         </div>
       )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Incident Details */}
+        {/* ── Incident Details ──────────────────────────────────────────── */}
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
             <FileText className="w-5 h-5" />
@@ -309,16 +325,16 @@ export default function NewOBEntryPage() {
             {/* Incident Date */}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Incident Date & Time *
+                Incident Date &amp; Time *
               </label>
               <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                 <input
                   type="datetime-local"
                   name="incidentDate"
                   value={formData.incidentDate}
                   onChange={handleChange}
-                  max={new Date().toISOString().slice(0, 16)}
+                  max={getLocalDateTimeString()}
                   className={`w-full pl-10 pr-4 py-3 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 ${
                     errors.incidentDate
                       ? 'border-red-500'
@@ -326,12 +342,7 @@ export default function NewOBEntryPage() {
                   }`}
                 />
               </div>
-              {errors.incidentDate && (
-                <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
-                  <AlertCircle className="w-4 h-4" />
-                  {errors.incidentDate}
-                </p>
-              )}
+              {errorMsg('incidentDate')}
             </div>
 
             {/* Category */}
@@ -343,25 +354,16 @@ export default function NewOBEntryPage() {
                 name="category"
                 value={formData.category}
                 onChange={handleChange}
-                className={`w-full px-4 py-3 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 ${
-                  errors.category
-                    ? 'border-red-500'
-                    : 'border-gray-300 dark:border-gray-600'
-                }`}
+                className={inputCls('category')}
               >
                 <option value="">Select category</option>
-                {Object.entries(INCIDENT_CATEGORIES).map(([key, value]) => (
+                {Object.entries(INCIDENT_CATEGORIES).map(([key, val]) => (
                   <option key={key} value={key}>
-                    {value.label}
+                    {val.label}
                   </option>
                 ))}
               </select>
-              {errors.category && (
-                <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
-                  <AlertCircle className="w-4 h-4" />
-                  {errors.category}
-                </p>
-              )}
+              {errorMsg('category')}
             </div>
 
             {/* Location */}
@@ -391,15 +393,10 @@ export default function NewOBEntryPage() {
                   Use GPS
                 </button>
               </div>
-              {errors.location && (
-                <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
-                  <AlertCircle className="w-4 h-4" />
-                  {errors.location}
-                </p>
-              )}
+              {errorMsg('location')}
             </div>
 
-            {/* GPS Coordinates */}
+            {/* Latitude */}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Latitude
@@ -414,6 +411,7 @@ export default function NewOBEntryPage() {
               />
             </div>
 
+            {/* Longitude */}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Longitude
@@ -448,17 +446,12 @@ export default function NewOBEntryPage() {
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 {formData.description.length} / 20 minimum characters
               </p>
-              {errors.description && (
-                <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
-                  <AlertCircle className="w-4 h-4" />
-                  {errors.description}
-                </p>
-              )}
+              {errorMsg('description')}
             </div>
           </div>
         </div>
 
-        {/* Reporter Information */}
+        {/* ── Reporter Information ──────────────────────────────────────── */}
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
             <User className="w-5 h-5" />
@@ -476,18 +469,9 @@ export default function NewOBEntryPage() {
                 value={formData.reportedBy}
                 onChange={handleChange}
                 placeholder="Full name"
-                className={`w-full px-4 py-3 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 ${
-                  errors.reportedBy
-                    ? 'border-red-500'
-                    : 'border-gray-300 dark:border-gray-600'
-                }`}
+                className={inputCls('reportedBy')}
               />
-              {errors.reportedBy && (
-                <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
-                  <AlertCircle className="w-4 h-4" />
-                  {errors.reportedBy}
-                </p>
-              )}
+              {errorMsg('reportedBy')}
             </div>
 
             <div>
@@ -495,7 +479,7 @@ export default function NewOBEntryPage() {
                 Contact Number *
               </label>
               <div className="relative">
-                <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                 <input
                   type="tel"
                   name="contactNumber"
@@ -509,17 +493,260 @@ export default function NewOBEntryPage() {
                   }`}
                 />
               </div>
-              {errors.contactNumber && (
-                <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
-                  <AlertCircle className="w-4 h-4" />
-                  {errors.contactNumber}
-                </p>
-              )}
+              {errorMsg('contactNumber')}
             </div>
           </div>
         </div>
 
-        {/* Action Buttons */}
+        {/* ── Witnesses ─────────────────────────────────────────────────── */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+              <User className="w-5 h-5" />
+              Witnesses
+              <span className="text-sm font-normal text-gray-500 dark:text-gray-400">
+                (optional)
+              </span>
+            </h2>
+            <button
+              type="button"
+              onClick={addWitness}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-blue-700 dark:text-blue-400 rounded-lg text-sm font-medium transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Add Witness
+            </button>
+          </div>
+
+          {witnesses.length === 0 ? (
+            <p className="text-center text-gray-400 dark:text-gray-500 py-6 text-sm">
+              No witnesses added. Click &quot;Add Witness&quot; to add one.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {witnesses.map((witness, index) => (
+                <div
+                  key={index}
+                  className="border border-gray-200 dark:border-gray-700 rounded-lg p-4"
+                >
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                      Witness {index + 1}
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => removeWitness(index)}
+                      className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                        Full Name
+                      </label>
+                      <input
+                        type="text"
+                        value={witness.name}
+                        onChange={(e) => updateWitness(index, 'name', e.target.value)}
+                        placeholder="Witness full name"
+                        className={subInputCls}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                        Contact Number
+                      </label>
+                      <input
+                        type="tel"
+                        value={witness.contactNumber}
+                        onChange={(e) => updateWitness(index, 'contactNumber', e.target.value)}
+                        placeholder="0712345678"
+                        className={subInputCls}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                        ID Number
+                      </label>
+                      <input
+                        type="text"
+                        value={witness.idNumber}
+                        onChange={(e) => updateWitness(index, 'idNumber', e.target.value)}
+                        placeholder="National ID / Passport"
+                        className={subInputCls}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                        Address
+                      </label>
+                      <input
+                        type="text"
+                        value={witness.address}
+                        onChange={(e) => updateWitness(index, 'address', e.target.value)}
+                        placeholder="Residential address"
+                        className={subInputCls}
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                        Statement
+                      </label>
+                      <textarea
+                        value={witness.statement}
+                        onChange={(e) => updateWitness(index, 'statement', e.target.value)}
+                        rows={3}
+                        placeholder="Witness statement..."
+                        className={subInputCls}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── Suspects ──────────────────────────────────────────────────── */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+              <AlertCircle className="w-5 h-5" />
+              Suspects
+              <span className="text-sm font-normal text-gray-500 dark:text-gray-400">
+                (optional)
+              </span>
+            </h2>
+            <button
+              type="button"
+              onClick={addSuspect}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-700 dark:text-red-400 rounded-lg text-sm font-medium transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Add Suspect
+            </button>
+          </div>
+
+          {suspects.length === 0 ? (
+            <p className="text-center text-gray-400 dark:text-gray-500 py-6 text-sm">
+              No suspects added. Click &quot;Add Suspect&quot; to add one.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {suspects.map((suspect, index) => (
+                <div
+                  key={index}
+                  className="border border-gray-200 dark:border-gray-700 rounded-lg p-4"
+                >
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                      Suspect {index + 1}
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => removeSuspect(index)}
+                      className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                        Name (if known)
+                      </label>
+                      <input
+                        type="text"
+                        value={suspect.name}
+                        onChange={(e) => updateSuspect(index, 'name', e.target.value)}
+                        placeholder="Suspect name"
+                        className={subInputCls}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                        Alias / Nickname
+                      </label>
+                      <input
+                        type="text"
+                        value={suspect.alias.join(', ')}
+                        onChange={(e) =>
+                          updateSuspect(
+                            index,
+                            'alias',
+                            e.target.value.split(',').map((s) => s.trim()).filter(Boolean)
+                          )
+                        }
+                        placeholder="e.g., Mwizi, Bully (comma separated)"
+                        className={subInputCls}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                        Last Seen Location
+                      </label>
+                      <input
+                        type="text"
+                        value={suspect.lastSeenLocation}
+                        onChange={(e) => updateSuspect(index, 'lastSeenLocation', e.target.value)}
+                        placeholder="Location last seen"
+                        className={subInputCls}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                        Last Seen Time
+                      </label>
+                      <input
+                        type="text"
+                        value={suspect.lastSeenTime}
+                        onChange={(e) => updateSuspect(index, 'lastSeenTime', e.target.value)}
+                        placeholder="e.g., 14:30, yesterday evening"
+                        className={subInputCls}
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                        Physical Description
+                      </label>
+                      <textarea
+                        value={suspect.description}
+                        onChange={(e) => updateSuspect(index, 'description', e.target.value)}
+                        rows={2}
+                        placeholder="Height, build, clothing, etc."
+                        className={subInputCls}
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                        Identifying Features
+                      </label>
+                      <input
+                        type="text"
+                        value={suspect.identifyingFeatures.join(', ')}
+                        onChange={(e) =>
+                          updateSuspect(
+                            index,
+                            'identifyingFeatures',
+                            e.target.value.split(',').map((s) => s.trim()).filter(Boolean)
+                          )
+                        }
+                        placeholder="e.g., scar on left cheek, tattoo on arm (comma separated)"
+                        className={subInputCls}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── Action Buttons ────────────────────────────────────────────── */}
         <div className="flex items-center justify-end gap-4">
           <Link
             href="/dashboard/occurrence-book"

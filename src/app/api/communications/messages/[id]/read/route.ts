@@ -1,49 +1,55 @@
-// ============================================
-// FILE: src/app/api/communications/messages/[id]/read/route.ts
-// ============================================
+// app/api/communications/messages/[id]/read/route.ts
 
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db/prisma';
-import { MessageStatus } from '@prisma/client';
+import { NextRequest, NextResponse } from "next/server";
+import { getSession } from "@/lib/auth/session";
+import { prisma } from "@/lib/db/prisma";
 
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+type Params = { params: Promise<{ id: string }> };
+
+export async function PATCH(req: NextRequest, { params }: Params) {
   try {
-    const userId = request.headers.get('x-user-id');
+    const user = getSession(req);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-    if (!userId) {
+    const { id } = await params;
+
+    // Only the receiver can mark a message as read
+    const message = await prisma.internalMessage.findFirst({
+      where: {
+        id,
+        receiverId: user.id,
+      },
+      select: { id: true, isRead: true },
+    });
+
+    if (!message) {
       return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
+        { error: "Message not found or you are not the recipient" },
+        { status: 404 }
       );
     }
 
-    const message = await prisma.internalMessage.update({
-      where: {
-        id: params.id,
-        receiverId: userId, // Only receiver can mark as read
-      },
+    // No-op if already read — avoid unnecessary DB write
+    if (message.isRead) {
+      return NextResponse.json({ success: true, alreadyRead: true }, { status: 200 });
+    }
+
+    await prisma.internalMessage.update({
+      where: { id },
       data: {
         isRead: true,
         readAt: new Date(),
-        status: MessageStatus.READ,
+        status: "READ",
       },
     });
 
-    return NextResponse.json({
-      success: true,
-      message: { 
-        id: message.id, 
-        isRead: message.isRead,
-        readAt: message.readAt?.toISOString(),
-      },
-    });
+    return NextResponse.json({ success: true }, { status: 200 });
   } catch (error) {
-    console.error('Error marking message as read:', error);
+    console.error("[PATCH /api/communications/messages/[id]/read]", error);
     return NextResponse.json(
-      { success: false, error: 'Failed to update message' },
+      { error: "Failed to mark message as read" },
       { status: 500 }
     );
   }

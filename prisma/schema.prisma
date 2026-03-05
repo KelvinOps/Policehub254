@@ -9,7 +9,8 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  url       = env("DATABASE_URL") // Used by your application
+  directUrl = env("DIRECT_URL")   // Used by Prisma Migrate
 }
 
 // ============================================
@@ -114,8 +115,17 @@ model User {
   
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+
+    // Traffic relations
+  assignedTrafficIncidents TrafficIncident[] @relation("AssignedTrafficIncidents")
+  createdTrafficIncidents  TrafficIncident[] @relation("CreatedTrafficIncidents")
+  issuedCitations          Citation[]
+  uploadedAttachments      Attachment[]
   
-  // Relations - FIXED: lowercase "station"
+
+  gbvCasesRecorded   GBVCase[] @relation("GBVRecordedBy")
+  gbvCasesAssigned   GBVCase[] @relation("GBVAssignedTo")
+
   station                      Station?         @relation("UserStation", fields: [stationId], references: [id])
   AuditLog                     AuditLog[]
   Case_Case_assignedToIdToUser Case[]           @relation("Case_assignedToIdToUser")
@@ -138,6 +148,168 @@ model User {
   @@map("User")
 }
 
+// Add to your existing schema.prisma
+
+model TrafficIncident {
+  id                String    @id @default(cuid())
+  incidentNumber    String    @unique
+  type              String    // TRAFFIC, ACCIDENT, IMPOUND
+  status            String    @default("PENDING")
+  
+  // Basic Info
+  reportedAt        DateTime
+  reportedBy        String?
+  reportedById      String?
+  location          String
+  latitude          Float?
+  longitude         Float?
+  description       String    @db.Text
+  
+  // Assignment
+  assignedToId      String?
+  assignedTo        User?      @relation("AssignedTrafficIncidents", fields: [assignedToId], references: [id])
+  assignedToName    String?
+  assignedToBadge   String?
+  
+  // Station
+  stationId         String?
+  station           Station?   @relation(fields: [stationId], references: [id])
+  
+  // Accident specific
+  severity          String?    // MINOR, SERIOUS, FATAL, PROPERTY_DAMAGE
+  weatherConditions String?
+  roadConditions    String?
+  visibility        String?
+  diagram           String?    // URL to accident diagram
+  
+  // Impound specific
+  impoundReason     String?
+  impoundLocation   String?
+  impoundedAt       DateTime?
+  releasedAt        DateTime?
+  releasedTo        String?
+  impoundFee        Float?
+  paymentStatus     String?    // PAID, UNPAID, WAIVED, PENDING
+  storageLocation   String?
+  vehicleId         String?
+  
+  // Metadata
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  createdById       String
+  createdBy         User       @relation("CreatedTrafficIncidents", fields: [createdById], references: [id])
+  
+  // Relations
+  involvedVehicles  InvolvedVehicle[]
+  involvedPeople    InvolvedPerson[]
+  witnesses         Witness[]
+  citations         Citation[]
+  attachments       Attachment[]
+  
+  @@index([incidentNumber])
+  @@index([type])
+  @@index([status])
+  @@index([assignedToId])
+  @@index([stationId])
+  @@index([reportedAt])
+  @@map("TrafficIncident")
+}
+
+model InvolvedVehicle {
+  id                String   @id @default(cuid())
+  incidentId        String
+  incident          TrafficIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  
+  vehicleId         String?
+  registration      String
+  make              String
+  model             String
+  color             String?
+  type              String?
+  damageDescription String?
+  
+  ownerName         String?
+  ownerContact      String?
+  insuranceCompany  String?
+  insurancePolicy   String?
+  
+  @@index([incidentId])
+  @@map("InvolvedVehicle")
+}
+
+model InvolvedPerson {
+  id                String   @id @default(cuid())
+  incidentId        String
+  incident          TrafficIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  
+  name              String
+  idNumber          String?
+  phoneNumber       String?
+  address           String?
+  driverLicense     String?
+  role              String   // DRIVER, PASSENGER, PEDESTRIAN, OWNER, WITNESS
+  injuries          String?
+  medicalAttention  Boolean? @default(false)
+  
+  @@index([incidentId])
+  @@map("InvolvedPerson")
+}
+
+model Witness {
+  id                String   @id @default(cuid())
+  incidentId        String
+  incident          TrafficIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  
+  name              String
+  phoneNumber       String?
+  idNumber          String?
+  address           String?
+  statement         String?  @db.Text
+  statementDate     DateTime?
+  
+  @@index([incidentId])
+  @@map("Witness")
+}
+
+model Citation {
+  id                String   @id @default(cuid())
+  citationNumber    String   @unique
+  incidentId        String
+  incident          TrafficIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  
+  issuedTo          String
+  issuedToIdNumber  String?
+  violation         String
+  section           String?
+  amount            Float
+  issuedAt          DateTime @default(now())
+  issuedById        String
+  issuedBy          User     @relation(fields: [issuedById], references: [id])
+  dueDate           DateTime
+  paymentStatus     String   @default("UNPAID")
+  paidAt            DateTime?
+  notes             String?  @db.Text
+  
+  @@index([citationNumber])
+  @@index([incidentId])
+  @@index([paymentStatus])
+  @@map("Citation")
+}
+
+model Attachment {
+  id                String   @id @default(cuid())
+  fileName          String
+  fileUrl           String
+  fileType          String
+  uploadedAt        DateTime @default(now())
+  uploadedById      String
+  uploadedBy        User     @relation(fields: [uploadedById], references: [id])
+  incidentId        String
+  incident          TrafficIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  
+  @@index([incidentId])
+  @@map("Attachment")
+}
 model Station {
   id          String   @id @default(cuid())
   name        String
@@ -155,6 +327,11 @@ model Station {
   
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+   gbvCases           GBVCase[] @relation("StationGBVCases")
+
+    // Traffic relations
+  trafficIncidents TrafficIncident[]
   
   // Relations - FIXED: User relation properly named
   User               User[]            @relation("UserStation")
@@ -580,4 +757,171 @@ model PublicReport {
   @@index([assignedToStation])
   @@index([createdAt])
   @@map("PublicReport")
+}
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STEP 1: ADD these relations inside your existing User model:
+//   gbvCasesRecorded   GBVCase[] @relation("GBVRecordedBy")
+//   gbvCasesAssigned   GBVCase[] @relation("GBVAssignedTo")
+//
+// STEP 2: ADD this relation inside your existing Station model:
+//   gbvCases           GBVCase[] @relation("StationGBVCases")
+//
+// STEP 3: APPEND everything below to the END of your schema.prisma
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum GBVCaseStatus {
+  REPORTED
+  UNDER_INVESTIGATION
+  REFERRED
+  COURT_PROCEEDINGS
+  CLOSED
+  WITHDRAWN
+}
+
+enum GBVIncidentType {
+  PHYSICAL_VIOLENCE
+  SEXUAL_VIOLENCE
+  EMOTIONAL_ABUSE
+  ECONOMIC_ABUSE
+  STALKING
+  HARASSMENT
+  FGM
+  CHILD_MARRIAGE
+  OTHER
+}
+
+enum GBVRiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum GBVVictimGender {
+  FEMALE
+  MALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum SupportResourceType {
+  SHELTER
+  LEGAL_AID
+  MEDICAL
+  COUNSELING
+  POLICE
+  NGO
+  HOTLINE
+}
+
+model GBVCase {
+  id                  String          @id @default(cuid())
+  caseNumber          String          @unique
+  status              GBVCaseStatus   @default(REPORTED)
+  incidentType        GBVIncidentType
+  incidentDate        DateTime
+  reportedDate        DateTime        @default(now())
+  location            String
+  county              String?
+  subCounty           String?
+  description         String          @db.Text
+  victimAge           Int?
+  victimGender        GBVVictimGender?
+  victimCodeName      String?
+  victimInjured       Boolean         @default(false)
+  victimInjuryDesc    String?
+  perpetratorKnown    Boolean         @default(false)
+  perpetratorRelation String?
+  perpetratorArrested Boolean         @default(false)
+  riskLevel           GBVRiskLevel    @default(MEDIUM)
+  riskScore           Int             @default(50)
+  aiSummary           String?         @db.Text
+  aiRecommendations   String?         @db.Text
+  recurrenceRisk      Float?
+  stationId           String?
+  station             Station?        @relation("StationGBVCases", fields: [stationId], references: [id])
+  recordedById        String?
+  recordedBy          User?           @relation("GBVRecordedBy", fields: [recordedById], references: [id])
+  assignedToId        String?
+  assignedTo          User?           @relation("GBVAssignedTo", fields: [assignedToId], references: [id])
+  supportActions      GBVSupportAction[]
+  evidence            GBVEvidence[]
+  followUps           GBVFollowUp[]
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  @@index([stationId])
+  @@index([status])
+  @@index([riskLevel])
+  @@index([incidentDate])
+  @@index([recordedById])
+  @@index([assignedToId])
+  @@map("GBVCase")
+}
+
+model GBVSupportAction {
+  id          String              @id @default(cuid())
+  caseId      String
+  case        GBVCase             @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  type        SupportResourceType
+  description String
+  providedBy  String?
+  providedAt  DateTime            @default(now())
+  notes       String?             @db.Text
+
+  @@index([caseId])
+  @@map("GBVSupportAction")
+}
+
+model GBVEvidence {
+  id           String   @id @default(cuid())
+  caseId       String
+  case         GBVCase  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  fileName     String
+  fileUrl      String
+  fileType     String
+  uploadedAt   DateTime @default(now())
+  uploadedById String?
+
+  @@index([caseId])
+  @@map("GBVEvidence")
+}
+
+model GBVFollowUp {
+  id          String    @id @default(cuid())
+  caseId      String
+  case        GBVCase   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  notes       String    @db.Text
+  outcome     String?
+  scheduledAt DateTime?
+  completedAt DateTime?
+  officerId   String?
+  createdAt   DateTime  @default(now())
+
+  @@index([caseId])
+  @@map("GBVFollowUp")
+}
+
+model GBVResource {
+  id          String              @id @default(cuid())
+  name        String
+  type        SupportResourceType
+  county      String?
+  subCounty   String?
+  address     String?
+  phone       String?
+  email       String?
+  website     String?
+  description String?             @db.Text
+  isActive    Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([county])
+  @@index([type])
+  @@index([isActive])
+  @@map("GBVResource")
 }

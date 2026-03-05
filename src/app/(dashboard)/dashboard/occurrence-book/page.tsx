@@ -11,7 +11,6 @@ import {
   Eye,
   Edit,
   Trash2,
-  Download,
   Calendar,
   MapPin,
   User,
@@ -31,6 +30,7 @@ import {
   getStatusLabel,
 } from '@/lib/constants/occurrence-book';
 
+// FIX: Interface now matches Prisma relation names (capital S/U/C)
 interface OBEntry {
   id: string;
   obNumber: string;
@@ -42,11 +42,13 @@ interface OBEntry {
   status: IncidentStatus;
   reportedBy: string;
   contactNumber: string;
-  station: {
+  // Capital S — matches Prisma "Station" relation on OccurrenceBook
+  Station: {
     name: string;
     code: string;
   };
-  recordedBy: {
+  // Capital U — matches Prisma "User" relation on OccurrenceBook
+  User: {
     name: string;
     badgeNumber: string;
   };
@@ -75,7 +77,6 @@ export default function OccurrenceBookPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [user, setUser] = useState<UserData | null>(null);
 
-  // Load user data from localStorage
   useEffect(() => {
     const storedUser = localStorage.getItem('user');
     if (storedUser) {
@@ -107,6 +108,8 @@ export default function OccurrenceBookPage() {
       if (data.success) {
         setEntries(data.data.entries || []);
         setTotalPages(data.data.pagination?.totalPages || 1);
+      } else {
+        console.error('Failed to fetch entries:', data.error);
       }
     } catch (error) {
       console.error('Error fetching entries:', error);
@@ -117,12 +120,16 @@ export default function OccurrenceBookPage() {
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    setCurrentPage(1); // Reset to first page on new search
+    setCurrentPage(1);
     fetchEntries();
   };
 
   const handleDelete = async (id: string, obNumber: string) => {
-    if (!confirm(`Are you sure you want to delete OB entry ${obNumber}?\n\nThis action cannot be undone.`)) {
+    if (
+      !confirm(
+        `Are you sure you want to delete OB entry ${obNumber}?\n\nThis action cannot be undone.`
+      )
+    ) {
       return;
     }
 
@@ -131,12 +138,10 @@ export default function OccurrenceBookPage() {
       const response = await fetch(`/api/occurrence-book/${id}`, {
         method: 'DELETE',
       });
-
       const data = await response.json();
 
       if (data.success) {
         alert('OB entry deleted successfully');
-        // Refresh the list
         await fetchEntries();
       } else {
         alert(data.error || 'Failed to delete entry');
@@ -155,7 +160,7 @@ export default function OccurrenceBookPage() {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return new Date(dateString).toLocaleDateString('en-KE', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
@@ -163,6 +168,15 @@ export default function OccurrenceBookPage() {
       minute: '2-digit',
     });
   };
+
+  // ── Stats derived from current page entries ───────────────────────────────
+  const thisMonthCount = entries.filter((e) => {
+    const d = new Date(e.incidentDate);
+    const now = new Date();
+    return (
+      d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
+    );
+  }).length;
 
   return (
     <div className="space-y-6">
@@ -195,21 +209,23 @@ export default function OccurrenceBookPage() {
         />
         <StatCard
           title="Under Investigation"
-          value={
-            entries.filter((e) => e.status === 'UNDER_INVESTIGATION').length.toString()
-          }
+          value={entries
+            .filter((e) => e.status === 'UNDER_INVESTIGATION')
+            .length.toString()}
           icon={AlertTriangle}
           color="yellow"
         />
         <StatCard
           title="Resolved"
-          value={entries.filter((e) => e.status === 'RESOLVED').length.toString()}
+          value={entries
+            .filter((e) => e.status === 'RESOLVED')
+            .length.toString()}
           icon={FileText}
           color="green"
         />
         <StatCard
           title="This Month"
-          value={entries.length.toString()}
+          value={thisMonthCount.toString()}
           icon={Calendar}
           color="purple"
         />
@@ -220,7 +236,7 @@ export default function OccurrenceBookPage() {
         <form onSubmit={handleSearch} className="space-y-4">
           <div className="flex flex-col sm:flex-row gap-4">
             <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
               <input
                 type="text"
                 placeholder="Search by OB number, description, location..."
@@ -290,7 +306,7 @@ export default function OccurrenceBookPage() {
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
         {loading ? (
           <div className="flex items-center justify-center py-12">
-            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-600"></div>
+            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-600" />
           </div>
         ) : entries.length === 0 ? (
           <div className="text-center py-12">
@@ -341,23 +357,29 @@ export default function OccurrenceBookPage() {
                       key={entry.id}
                       className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                     >
+                      {/* OB Number + Station */}
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center gap-2">
-                          <FileText className="w-5 h-5 text-blue-600" />
+                          <FileText className="w-5 h-5 text-blue-600 shrink-0" />
                           <div>
                             <div className="text-sm font-medium text-gray-900 dark:text-white">
                               {entry.obNumber}
                             </div>
+                            {/* FIX: entry.Station.name (capital S) */}
                             <div className="text-xs text-gray-500 dark:text-gray-400">
-                              {entry.station.name}
+                              {entry.Station?.name ?? '—'}
                             </div>
                           </div>
                         </div>
                       </td>
+
+                      {/* Incident Details */}
                       <td className="px-6 py-4">
                         <div className="max-w-xs">
                           <div className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                            {entry.description.substring(0, 60)}...
+                            {entry.description.length > 60
+                              ? entry.description.substring(0, 60) + '…'
+                              : entry.description}
                           </div>
                           <div className="flex items-center gap-4 mt-1 text-xs text-gray-500 dark:text-gray-400">
                             <span className="flex items-center gap-1">
@@ -371,6 +393,8 @@ export default function OccurrenceBookPage() {
                           </div>
                         </div>
                       </td>
+
+                      {/* Category */}
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span
                           className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${getCategoryColor(
@@ -380,6 +404,8 @@ export default function OccurrenceBookPage() {
                           {getCategoryLabel(entry.category)}
                         </span>
                       </td>
+
+                      {/* Status */}
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span
                           className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(
@@ -389,40 +415,47 @@ export default function OccurrenceBookPage() {
                           {getStatusLabel(entry.status)}
                         </span>
                       </td>
+
+                      {/* Date */}
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400">
                           <Clock className="w-4 h-4" />
                           {formatDate(entry.incidentDate)}
                         </div>
                       </td>
+
+                      {/* Actions */}
                       <td className="px-6 py-4 whitespace-nowrap text-right">
                         <div className="flex items-center justify-end gap-2">
-                          {/* View Button */}
                           <button
                             onClick={() =>
-                              router.push(`/dashboard/occurrence-book/${entry.id}`)
+                              router.push(
+                                `/dashboard/occurrence-book/${entry.id}`
+                              )
                             }
                             className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
                             title="View Details"
                           >
                             <Eye className="w-4 h-4" />
                           </button>
-                          
-                          {/* Edit Button */}
+
                           <button
                             onClick={() =>
-                              router.push(`/dashboard/occurrence-book/${entry.id}/edit`)
+                              router.push(
+                                `/dashboard/occurrence-book/${entry.id}/edit`
+                              )
                             }
                             className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                             title="Edit Entry"
                           >
                             <Edit className="w-4 h-4" />
                           </button>
-                          
-                          {/* Delete Button - Only for admins */}
+
                           {canDelete() && (
                             <button
-                              onClick={() => handleDelete(entry.id, entry.obNumber)}
+                              onClick={() =>
+                                handleDelete(entry.id, entry.obNumber)
+                              }
                               disabled={deletingId === entry.id}
                               className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                               title="Delete Entry"
@@ -450,14 +483,18 @@ export default function OccurrenceBookPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    onClick={() =>
+                      setCurrentPage((p) => Math.max(1, p - 1))
+                    }
                     disabled={currentPage === 1}
                     className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     <ChevronLeft className="w-5 h-5" />
                   </button>
                   <button
-                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    onClick={() =>
+                      setCurrentPage((p) => Math.min(totalPages, p + 1))
+                    }
                     disabled={currentPage === totalPages}
                     className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
@@ -473,6 +510,8 @@ export default function OccurrenceBookPage() {
   );
 }
 
+// ── StatCard ──────────────────────────────────────────────────────────────────
+
 function StatCard({
   title,
   value,
@@ -481,14 +520,17 @@ function StatCard({
 }: {
   title: string;
   value: string;
-  icon: any;
-  color: string;
+  icon: React.ComponentType<{ className?: string }>;
+  color: 'blue' | 'yellow' | 'green' | 'purple';
 }) {
-  const colorClasses = {
+  const colorClasses: Record<string, string> = {
     blue: 'bg-blue-100 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400',
-    yellow: 'bg-yellow-100 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400',
-    green: 'bg-green-100 dark:bg-green-900/20 text-green-600 dark:text-green-400',
-    purple: 'bg-purple-100 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
+    yellow:
+      'bg-yellow-100 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400',
+    green:
+      'bg-green-100 dark:bg-green-900/20 text-green-600 dark:text-green-400',
+    purple:
+      'bg-purple-100 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
   };
 
   return (
@@ -503,9 +545,7 @@ function StatCard({
           </p>
         </div>
         <div
-          className={`w-12 h-12 rounded-lg flex items-center justify-center ${
-            colorClasses[color as keyof typeof colorClasses]
-          }`}
+          className={`w-12 h-12 rounded-lg flex items-center justify-center ${colorClasses[color]}`}
         >
           <Icon className="w-6 h-6" />
         </div>

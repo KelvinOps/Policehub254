@@ -1,6 +1,4 @@
-// ============================================
-// FILE 4: src/app/api/auth/me/route.ts
-// ============================================
+// src/app/api/auth/me/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
@@ -10,28 +8,59 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-producti
 
 export async function GET(request: NextRequest) {
   try {
-    const token = request.cookies.get('auth-token')?.value;
+    // ── 1. Try middleware-injected headers first (fastest path) ───────────
+    const userIdFromHeader = request.headers.get('x-user-id');
 
-    if (!token) {
+    let userId: string | null = userIdFromHeader;
+
+    // ── 2. Fallback to cookie JWT ─────────────────────────────────────────
+    if (!userId) {
+      const token = request.cookies.get('auth-token')?.value;
+
+      if (!token) {
+        return NextResponse.json(
+          { success: false, error: 'Not authenticated' },
+          { status: 401 }
+        );
+      }
+
+      try {
+        // BUG FIX: was using decoded.userId — JWT payload uses `id`
+        const decoded = jwt.verify(token, JWT_SECRET) as { id: string };
+        userId = decoded.id;
+      } catch {
+        return NextResponse.json(
+          { success: false, error: 'Invalid or expired token' },
+          { status: 401 }
+        );
+      }
+    }
+
+    if (!userId) {
       return NextResponse.json(
         { success: false, error: 'Not authenticated' },
         { status: 401 }
       );
     }
 
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
-
-    // Fetch fresh user data from database
+    // ── 3. Fetch fresh user data ───────────────────────────────────────────
     const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      include: {
+      where: { id: userId },
+      select: {
+        id:          true,
+        email:       true,
+        name:        true,
+        role:        true,
+        stationId:   true,
+        badgeNumber: true,
+        isActive:    true,
+        lastLogin:   true,
         station: {
           select: {
-            id: true,
-            name: true,
-            code: true,
-            county: true,
+            id:        true,
+            name:      true,
+            code:      true,
+            county:    true,
             subCounty: true,
           },
         },
@@ -52,19 +81,15 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Remove password from response
-    const { password: _, ...userWithoutPassword } = user;
+    // Remove isActive from response (internal field)
+    const { isActive: _, ...safeUser } = user;
 
-    return NextResponse.json({
-      success: true,
-      user: userWithoutPassword,
-    });
-
+    return NextResponse.json({ success: true, user: safeUser });
   } catch (error) {
-    console.error('Auth verification error:', error);
+    console.error('Auth /me error:', error);
     return NextResponse.json(
-      { success: false, error: 'Invalid token' },
-      { status: 401 }
+      { success: false, error: 'Internal server error' },
+      { status: 500 }
     );
   }
 }

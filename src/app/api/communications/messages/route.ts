@@ -1,250 +1,182 @@
-// ============================================
-// FILE: src/app/api/communications/messages/route.ts
-// UPDATED for InternalMessage model
-// ============================================
+// app/api/communications/messages/route.ts
 
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db/prisma';
-import { MessageStatus, AlertPriority } from '@prisma/client';
+import { NextRequest, NextResponse } from "next/server";
+import { getSession } from "@/lib/auth/session";
+import { prisma } from "@/lib/db/prisma";
 
-export async function GET(request: NextRequest) {
+export async function GET(req: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id');
-    const userRole = request.headers.get('x-user-role');
-    const stationId = request.headers.get('x-user-station');
-
-    if (!userId) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
+    const user = getSession(req);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Determine message visibility based on role
-    const canSeeAllStationMessages = ['SUPER_ADMIN', 'ADMIN', 'STATION_COMMANDER', 'OCS'].includes(userRole || '');
+    const { searchParams } = new URL(req.url);
+    const tab = (searchParams.get("tab") ?? "inbox") as "inbox" | "sent" | "archived";
+    const search = searchParams.get("search") ?? "";
+    const priority = searchParams.get("priority") ?? "ALL";
+    const page = Math.max(1, parseInt(searchParams.get("page") ?? "1", 10));
+    const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") ?? "20", 10)));
+    const skip = (page - 1) * limit;
 
-    // Build query conditions
-    const whereConditions = canSeeAllStationMessages && stationId
-      ? {
-          OR: [
-            { senderId: userId },
-            { receiverId: userId },
-            { stationId: stationId }
-          ]
-        }
-      : {
-          OR: [
-            { senderId: userId },
-            { receiverId: userId }
-          ]
-        };
+    // ── Build where clause based on folder tab ───────────────────────────────
+    const baseWhere =
+      tab === "inbox"
+        ? { receiverId: user.id, isArchived: false }
+        : tab === "sent"
+        ? { senderId: user.id, isArchived: false }
+        : {
+            OR: [{ senderId: user.id }, { receiverId: user.id }],
+            isArchived: true,
+          };
 
-    const messages = await prisma.internalMessage.findMany({
-      where: whereConditions,
-      include: {
-        sender: {
-          select: {
-            id: true,
-            name: true,
-            badgeNumber: true,
-            role: true,
+    // ── Search filter ────────────────────────────────────────────────────────
+    const searchFilter =
+      search.trim()
+        ? {
+            OR: [
+              { subject: { contains: search, mode: "insensitive" as const } },
+              { content: { contains: search, mode: "insensitive" as const } },
+            ],
+          }
+        : {};
+
+    // ── Priority filter ──────────────────────────────────────────────────────
+    // InternalMessage.priority uses AlertPriority enum: HIGH | MEDIUM | LOW | URGENT
+    const priorityFilter =
+      priority !== "ALL"
+        ? { priority: priority as "HIGH" | "MEDIUM" | "LOW" | "URGENT" }
+        : {};
+
+    const where = { ...baseWhere, ...searchFilter, ...priorityFilter };
+
+    const [messages, total, unreadCount] = await Promise.all([
+      prisma.internalMessage.findMany({
+        where,
+        include: {
+          sender: {
+            select: {
+              id: true,
+              name: true,
+              role: true,
+              badgeNumber: true,
+              rank: true,
+              department: true,
+              avatar: true,
+              stationId: true,
+            },
+          },
+          receiver: {
+            select: {
+              id: true,
+              name: true,
+              role: true,
+              badgeNumber: true,
+              rank: true,
+              department: true,
+              avatar: true,
+              stationId: true,
+            },
           },
         },
-        receiver: {
-          select: {
-            id: true,
-            name: true,
-            badgeNumber: true,
-            role: true,
-          },
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+      }),
+      prisma.internalMessage.count({ where }),
+      prisma.internalMessage.count({
+        where: {
+          receiverId: user.id,
+          isRead: false,
+          isArchived: false,
         },
-        station: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
-        },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-      take: 100, // Limit to recent 100 messages
-    });
+      }),
+    ]);
 
-    // Format messages for frontend
-    const formattedMessages = messages.map(msg => ({
-      id: msg.id,
-      senderId: msg.senderId,
-      senderName: msg.sender.name,
-      senderBadge: msg.sender.badgeNumber || 'N/A',
-      senderRole: msg.sender.role,
-      receiverId: msg.receiverId,
-      receiverName: msg.receiver.name,
-      receiverBadge: msg.receiver.badgeNumber || 'N/A',
-      subject: msg.subject,
-      content: msg.content,
-      status: msg.status,
-      priority: msg.priority,
-      isRead: msg.isRead,
-      readAt: msg.readAt?.toISOString() || null,
-      isArchived: msg.isArchived,
-      threadId: msg.threadId,
-      replyToId: msg.replyToId,
-      attachments: msg.attachments,
-      stationId: msg.stationId || '',
-      stationName: msg.station?.name || 'N/A',
-      createdAt: msg.createdAt.toISOString(),
-      updatedAt: msg.updatedAt.toISOString(),
-    }));
-
-    // Calculate statistics
-    const stats = {
-      total: formattedMessages.length,
-      unread: formattedMessages.filter(m => !m.isRead && m.receiverId === userId).length,
-      sent: formattedMessages.filter(m => m.senderId === userId).length,
-      received: formattedMessages.filter(m => m.receiverId === userId).length,
-    };
-
-    return NextResponse.json({
-      success: true,
-      messages: formattedMessages,
-      stats,
-    });
-  } catch (error) {
-    console.error('Error fetching messages:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch messages' },
+      { messages, total, unreadCount, page, limit },
+      { status: 200 }
+    );
+  } catch (error) {
+    console.error("[GET /api/communications/messages]", error);
+    return NextResponse.json(
+      { error: "Failed to fetch messages" },
       { status: 500 }
     );
   }
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id');
-    const stationId = request.headers.get('x-user-station');
-
-    if (!userId) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
+    const user = getSession(req);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = await request.json();
-    const { 
-      receiverId, 
-      subject, 
-      content, 
-      priority = 'MEDIUM',
-      threadId = null,
-      replyToId = null,
-      attachments = []
-    } = body;
+    const body = await req.json();
+    const { receiverId, subject, content, priority, replyToId, threadId } = body;
 
-    // Validation
-    if (!receiverId || !subject || !content) {
+    if (!receiverId || !subject?.trim() || !content?.trim()) {
       return NextResponse.json(
-        { success: false, error: 'Missing required fields: receiverId, subject, content' },
+        { error: "receiverId, subject, and content are required" },
         { status: 400 }
       );
     }
 
-    // Verify receiver exists
+    // Verify receiver exists and is active
     const receiver = await prisma.user.findUnique({
       where: { id: receiverId },
-      select: { id: true, name: true, isActive: true }
+      select: { id: true, isActive: true },
     });
 
-    if (!receiver) {
+    if (!receiver || !receiver.isActive) {
       return NextResponse.json(
-        { success: false, error: 'Receiver not found' },
+        { error: "Recipient not found or inactive" },
         { status: 404 }
       );
     }
 
-    if (!receiver.isActive) {
+    // Cannot message yourself
+    if (receiverId === user.id) {
       return NextResponse.json(
-        { success: false, error: 'Cannot send message to inactive user' },
+        { error: "Cannot send a message to yourself" },
         { status: 400 }
       );
     }
 
-    // Create message
     const message = await prisma.internalMessage.create({
       data: {
-        senderId: userId,
+        senderId: user.id,
         receiverId,
-        subject,
-        content,
-        priority: priority as AlertPriority,
-        status: MessageStatus.SENT,
-        stationId: stationId || undefined,
-        threadId,
-        replyToId,
-        attachments,
-        isRead: false,
-      },
-      include: {
-        sender: {
-          select: {
-            id: true,
-            name: true,
-            badgeNumber: true,
-          },
-        },
-        receiver: {
-          select: {
-            id: true,
-            name: true,
-            badgeNumber: true,
-          },
-        },
+        subject: subject.trim(),
+        content: content.trim(),
+        // InternalMessage.priority is AlertPriority enum
+        priority: (priority ?? "MEDIUM") as "HIGH" | "MEDIUM" | "LOW" | "URGENT",
+        replyToId: replyToId ?? null,
+        threadId: threadId ?? null,
+        status: "SENT",
+        stationId: user.stationId ?? null,
       },
     });
 
-    // Create notification for receiver
+    // Create inbox notification for the receiver
     await prisma.notification.create({
       data: {
         userId: receiverId,
-        title: 'New Message',
-        message: `You have a new message from ${message.sender.name}: ${subject}`,
-        type: 'MESSAGE',
+        title: "New Message",
+        message: `You have a new message: "${subject.trim().slice(0, 80)}"`,
+        type: "MESSAGE",
         relatedId: message.id,
-        relatedType: 'MESSAGE',
-        actionUrl: `/communications/messages`,
-      },
-    }).catch(err => console.error('Failed to create notification:', err));
-
-    // Audit log
-    await prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'CREATE',
-        entity: 'MESSAGE',
-        entityId: message.id,
-        changes: {
-          to: receiverId,
-          subject,
-        },
-      },
-    }).catch(err => console.error('Failed to create audit log:', err));
-
-    return NextResponse.json({
-      success: true,
-      message: {
-        id: message.id,
-        subject: message.subject,
-        senderName: message.sender.name,
-        receiverName: message.receiver.name,
-        createdAt: message.createdAt.toISOString(),
+        relatedType: "InternalMessage",
+        actionUrl: `/dashboard/communications/messages`,
       },
     });
+
+    return NextResponse.json({ message }, { status: 201 });
   } catch (error) {
-    console.error('Error creating message:', error);
+    console.error("[POST /api/communications/messages]", error);
     return NextResponse.json(
-      { success: false, error: 'Failed to send message' },
+      { error: "Failed to send message" },
       { status: 500 }
     );
   }

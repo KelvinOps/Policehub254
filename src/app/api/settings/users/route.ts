@@ -1,138 +1,138 @@
-// ============================================
-// FILE: src/app/api/settings/users/route.ts
-// ============================================
+// app/api/settings/users/route.ts
 
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db/prisma';
+import { NextRequest, NextResponse } from "next/server";
+import { getSession } from "@/lib/auth/session";
+import { prisma } from "@/lib/db/prisma";
+import { UserRole } from "@prisma/client";
+import bcrypt from "bcryptjs";
 
-export async function GET(request: NextRequest) {
+const MANAGE_ROLES: UserRole[] = [
+  UserRole.SUPER_ADMIN, UserRole.ADMIN,
+  UserRole.STATION_COMMANDER, UserRole.OCS,
+];
+
+const USER_SELECT = {
+  id: true, name: true, email: true, role: true,
+  badgeNumber: true, phoneNumber: true, rank: true,
+  department: true, avatar: true, stationId: true,
+  isActive: true, lastLogin: true, createdAt: true, updatedAt: true,
+  station: { select: { id: true, name: true, code: true } },
+} as const;
+
+// ── GET  /api/settings/users ────────────────────────────────────────────────
+
+export async function GET(req: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id');
-    const userRole = request.headers.get('x-user-role');
-    const stationId = request.headers.get('x-user-station');
+    const user = getSession(req);
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!userId) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
+    const { searchParams } = new URL(req.url);
+    const search    = searchParams.get("search")    ?? "";
+    const role      = searchParams.get("role")      ?? "";
+    const stationId = searchParams.get("stationId") ?? "";
+    const isActive  = searchParams.get("isActive");
+    const page      = Math.max(1, parseInt(searchParams.get("page")  ?? "1",  10));
+    const limit     = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") ?? "20", 10)));
+    const skip      = (page - 1) * limit;
+
+    const isGlobalAdmin = user.role === UserRole.SUPER_ADMIN || user.role === UserRole.ADMIN;
+    const where: Record<string, unknown> = {};
+
+    if (search.trim()) {
+      where.OR = [
+        { name:        { contains: search, mode: "insensitive" } },
+        { email:       { contains: search, mode: "insensitive" } },
+        { badgeNumber: { contains: search, mode: "insensitive" } },
+        { rank:        { contains: search, mode: "insensitive" } },
+      ];
     }
 
-    // Check permissions - only admins and commanders can view users
-    const canManageUsers = ['SUPER_ADMIN', 'STATION_COMMANDER'].includes(userRole || '');
+    if (role) where.role = role as UserRole;
+    if (isActive !== null && isActive !== "") where.isActive = isActive === "true";
 
-    if (!canManageUsers) {
-      return NextResponse.json(
-        { success: false, error: 'Insufficient permissions' },
-        { status: 403 }
-      );
+    if (!isGlobalAdmin) {
+      where.stationId = user.stationId ?? "__none__";
+    } else if (stationId) {
+      where.stationId = stationId;
     }
 
-    // Super admins see all users, commanders see only their station users
-    const canSeeAll = userRole === 'SUPER_ADMIN';
+    const [users, total] = await Promise.all([
+      prisma.user.findMany({
+        where,
+        select: USER_SELECT,
+        orderBy: [{ isActive: "desc" }, { name: "asc" }],
+        skip,
+        take: limit,
+      }),
+      prisma.user.count({ where }),
+    ]);
 
-    const users = await prisma.user.findMany({
-      where: canSeeAll ? {} : stationId ? { stationId } : {},
-      include: {
-        station: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
-
-    const formattedUsers = users.map(user => ({
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      badgeNumber: user.badgeNumber || '',
-      stationId: user.stationId || '',
-      stationName: user.station?.name || 'Not assigned',
-      phoneNumber: user.phoneNumber || '',
-      isActive: user.isActive,
-      createdAt: user.createdAt.toISOString(),
-      lastLogin: user.lastLogin?.toISOString() || '',
-    }));
-
-    return NextResponse.json({
-      success: true,
-      users: formattedUsers,
-    });
+    return NextResponse.json({ users, total, page, limit }, { status: 200 });
   } catch (error) {
-    console.error('Error fetching users:', error);
-    return NextResponse.json(
-      { success: false, error: 'Failed to fetch users' },
-      { status: 500 }
-    );
+    console.error("[GET /api/settings/users]", error);
+    return NextResponse.json({ error: "Failed to fetch users" }, { status: 500 });
   }
 }
 
-export async function PATCH(request: NextRequest) {
+// ── POST  /api/settings/users  (create) ────────────────────────────────────
+
+export async function POST(req: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id');
-    const userRole = request.headers.get('x-user-role');
-    const userStationId = request.headers.get('x-user-station');
+    const user = getSession(req);
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!userId) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
+    if (!MANAGE_ROLES.includes(user.role as UserRole)) {
+      return NextResponse.json({ error: "Insufficient permissions to create users" }, { status: 403 });
     }
 
-    const body = await request.json();
-    const { targetUserId, ...updateData } = body;
+    const body = await req.json();
+    const { name, email, password, role, badgeNumber, phoneNumber, rank, department, stationId } = body;
 
-    // Get target user to check permissions
-    const targetUser = await prisma.user.findUnique({
-      where: { id: targetUserId },
+    if (!name?.trim() || !email?.trim() || !password || !role) {
+      return NextResponse.json({ error: "name, email, password, and role are required" }, { status: 400 });
+    }
+
+    if (password.length < 8) {
+      return NextResponse.json({ error: "Password must be at least 8 characters" }, { status: 400 });
+    }
+
+    const emailExists = await prisma.user.findUnique({
+      where: { email: email.trim().toLowerCase() }, select: { id: true },
     });
+    if (emailExists) return NextResponse.json({ error: "Email address already in use" }, { status: 409 });
 
-    if (!targetUser) {
-      return NextResponse.json(
-        { success: false, error: 'User not found' },
-        { status: 404 }
-      );
+    if (badgeNumber?.trim()) {
+      const badgeExists = await prisma.user.findUnique({
+        where: { badgeNumber: badgeNumber.trim().toUpperCase() }, select: { id: true },
+      });
+      if (badgeExists) return NextResponse.json({ error: "Badge number already in use" }, { status: 409 });
     }
 
-    // Check permissions
-    const canEdit = userRole === 'SUPER_ADMIN' || 
-      (userRole === 'STATION_COMMANDER' && userStationId === targetUser.stationId);
+    // Station-scoped users can only create within their station
+    const isGlobalAdmin = user.role === UserRole.SUPER_ADMIN || user.role === UserRole.ADMIN;
+    const resolvedStationId = isGlobalAdmin ? (stationId || null) : (user.stationId || null);
 
-    if (!canEdit) {
-      return NextResponse.json(
-        { success: false, error: 'Insufficient permissions' },
-        { status: 403 }
-      );
-    }
+    const hashed = await bcrypt.hash(password, 12);
 
-    const updatedUser = await prisma.user.update({
-      where: { id: targetUserId },
-      data: updateData,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        isActive: true,
+    const newUser = await prisma.user.create({
+      data: {
+        name:        name.trim(),
+        email:       email.trim().toLowerCase(),
+        password:    hashed,
+        role:        role as UserRole,
+        badgeNumber: badgeNumber?.trim().toUpperCase() || null,
+        phoneNumber: phoneNumber?.trim()               || null,
+        rank:        rank?.trim()                      || null,
+        department:  department?.trim()                || null,
+        stationId:   resolvedStationId,
+        isActive:    true,
       },
+      select: USER_SELECT,
     });
 
-    return NextResponse.json({
-      success: true,
-      user: updatedUser,
-    });
+    return NextResponse.json({ user: newUser }, { status: 201 });
   } catch (error) {
-    console.error('Error updating user:', error);
-    return NextResponse.json(
-      { success: false, error: 'Failed to update user' },
-      { status: 500 }
-    );
+    console.error("[POST /api/settings/users]", error);
+    return NextResponse.json({ error: "Failed to create user" }, { status: 500 });
   }
 }

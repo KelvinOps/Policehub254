@@ -22,6 +22,8 @@ import {
   Camera,
   File,
   Eye,
+  RotateCcw,
+  Info,
 } from 'lucide-react';
 import {
   GENDER_OPTIONS,
@@ -45,12 +47,43 @@ interface EvidenceItem {
   uploadedBy: string;
 }
 
+// ── Evidence types shown in the "Other Evidence" form (excludes FINGERPRINT
+//    since fingerprints now have their own dedicated section)
 const EVIDENCE_TYPES = [
-  { value: 'PHOTO', label: 'Photograph', icon: Camera },
-  { value: 'FINGERPRINT', label: 'Fingerprint', icon: Fingerprint },
-  { value: 'DOCUMENT', label: 'Document', icon: FileText },
-  { value: 'OTHER', label: 'Other Evidence', icon: File },
+  { value: 'PHOTO',    label: 'Photograph',     icon: Camera   },
+  { value: 'DOCUMENT', label: 'Document',        icon: FileText },
+  { value: 'OTHER',    label: 'Other Evidence',  icon: File     },
 ] as const;
+
+// ── 10-finger constants ──────────────────────────────────────────────────────
+
+const FINGER_SLOTS = [
+  { key: 'RIGHT_THUMB',  label: 'Thumb',  hand: 'right' as const },
+  { key: 'RIGHT_INDEX',  label: 'Index',  hand: 'right' as const },
+  { key: 'RIGHT_MIDDLE', label: 'Middle', hand: 'right' as const },
+  { key: 'RIGHT_RING',   label: 'Ring',   hand: 'right' as const },
+  { key: 'RIGHT_PINKY',  label: 'Pinky',  hand: 'right' as const },
+  { key: 'LEFT_THUMB',   label: 'Thumb',  hand: 'left'  as const },
+  { key: 'LEFT_INDEX',   label: 'Index',  hand: 'left'  as const },
+  { key: 'LEFT_MIDDLE',  label: 'Middle', hand: 'left'  as const },
+  { key: 'LEFT_RING',    label: 'Ring',   hand: 'left'  as const },
+  { key: 'LEFT_PINKY',   label: 'Pinky',  hand: 'left'  as const },
+];
+
+const FINGER_LABEL_MAP: Record<string, string> = {
+  RIGHT_THUMB:  'Right Thumb',
+  RIGHT_INDEX:  'Right Index',
+  RIGHT_MIDDLE: 'Right Middle',
+  RIGHT_RING:   'Right Ring',
+  RIGHT_PINKY:  'Right Pinky',
+  LEFT_THUMB:   'Left Thumb',
+  LEFT_INDEX:   'Left Index',
+  LEFT_MIDDLE:  'Left Middle',
+  LEFT_RING:    'Left Ring',
+  LEFT_PINKY:   'Left Pinky',
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function NewCriminalPage() {
   const router = useRouter();
@@ -63,8 +96,8 @@ export default function NewCriminalPage() {
   const [currentAlias, setCurrentAlias] = useState('');
   const [photoPreview, setPhotoPreview] = useState<string>('');
   const [evidenceItems, setEvidenceItems] = useState<EvidenceItem[]>([]);
-  
-  // Evidence form state
+
+  // Evidence form state (other evidence, not fingerprints)
   const [showEvidenceForm, setShowEvidenceForm] = useState(false);
   const [currentEvidence, setCurrentEvidence] = useState<Partial<EvidenceItem>>({
     type: 'PHOTO',
@@ -72,6 +105,10 @@ export default function NewCriminalPage() {
     description: '',
   });
   const [evidencePreview, setEvidencePreview] = useState<string>('');
+
+  // ── NEW: per-finger preview URLs and uploading flags ──
+  const [fingerprintPreviews, setFingerprintPreviews] = useState<Record<string, string>>({});
+  const [fingerprintUploading, setFingerprintUploading] = useState<Record<string, boolean>>({});
 
   const [formData, setFormData] = useState({
     firstName: '',
@@ -193,13 +230,11 @@ export default function NewCriminalPage() {
           fileSize: data.data.size,
           mimeType: data.data.mimeType,
         }));
-        
-        // Set preview for images
+
         if (file.type.startsWith('image/')) {
           setEvidencePreview(data.data.url);
         }
-        
-        // Auto-fill title if empty
+
         if (!currentEvidence.title) {
           setCurrentEvidence((prev) => ({
             ...prev,
@@ -217,6 +252,85 @@ export default function NewCriminalPage() {
     }
   };
 
+  // ── NEW: upload a single fingerprint image ───────────────────────────────
+
+  const handleFingerprintUpload = async (
+    fingerType: string,
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reset so the same file can be re-selected after removal
+    e.target.value = '';
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please upload an image file for fingerprints');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      alert('File must be under 5 MB');
+      return;
+    }
+
+    setFingerprintUploading((prev) => ({ ...prev, [fingerType]: true }));
+
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const uploadRes = await fetch('/api/upload', { method: 'POST', body: fd });
+      const uploadData = await uploadRes.json();
+
+      if (!uploadData.success) {
+        alert(uploadData.error || 'Upload failed');
+        return;
+      }
+
+      const { url, filename, size, mimeType } = uploadData.data;
+
+      // Store preview
+      setFingerprintPreviews((prev) => ({ ...prev, [fingerType]: url }));
+
+      // Upsert into evidenceItems as a FINGERPRINT record keyed by fingerType in title
+      setEvidenceItems((prev) => {
+        const filtered = prev.filter(
+          (item) => !(item.type === 'FINGERPRINT' && item.title === fingerType)
+        );
+        return [
+          ...filtered,
+          {
+            type: 'FINGERPRINT',
+            title: fingerType, // fingerType key stored in title — matches the fingerprints API
+            description: `Finger: ${FINGER_LABEL_MAP[fingerType]}. Captured during registration.`,
+            fileUrl: url,
+            fileName: filename,
+            fileSize: size,
+            mimeType,
+            uploadedBy: 'SYSTEM',
+          },
+        ];
+      });
+    } catch (err) {
+      console.error('Fingerprint upload error:', err);
+      alert('An error occurred during upload');
+    } finally {
+      setFingerprintUploading((prev) => ({ ...prev, [fingerType]: false }));
+    }
+  };
+
+  const removeFingerprintPreview = (fingerType: string) => {
+    setFingerprintPreviews((prev) => {
+      const next = { ...prev };
+      delete next[fingerType];
+      return next;
+    });
+    setEvidenceItems((prev) =>
+      prev.filter((item) => !(item.type === 'FINGERPRINT' && item.title === fingerType))
+    );
+  };
+
+  // ── /NEW ─────────────────────────────────────────────────────────────────
+
   const addEvidence = () => {
     if (!currentEvidence.fileUrl || !currentEvidence.title) {
       alert('Please upload a file and provide a title');
@@ -231,17 +345,12 @@ export default function NewCriminalPage() {
       fileName: currentEvidence.fileName || '',
       fileSize: currentEvidence.fileSize || 0,
       mimeType: currentEvidence.mimeType || '',
-      uploadedBy: 'SYSTEM', // Will be replaced with actual user ID on server
+      uploadedBy: 'SYSTEM',
     };
 
     setEvidenceItems((prev) => [...prev, newEvidence]);
-    
-    // Reset form
-    setCurrentEvidence({
-      type: 'PHOTO',
-      title: '',
-      description: '',
-    });
+
+    setCurrentEvidence({ type: 'PHOTO', title: '', description: '' });
     setEvidencePreview('');
     setShowEvidenceForm(false);
   };
@@ -251,11 +360,7 @@ export default function NewCriminalPage() {
   };
 
   const cancelEvidenceForm = () => {
-    setCurrentEvidence({
-      type: 'PHOTO',
-      title: '',
-      description: '',
-    });
+    setCurrentEvidence({ type: 'PHOTO', title: '', description: '' });
     setEvidencePreview('');
     setShowEvidenceForm(false);
   };
@@ -281,11 +386,11 @@ export default function NewCriminalPage() {
 
     try {
       setLoading(true);
-      
+
       const payload = {
         ...formData,
         alias: aliases,
-        evidenceItems,
+        evidenceItems, // fingerprints are included here as type=FINGERPRINT items
       };
 
       console.log('Submitting criminal record:', payload);
@@ -314,9 +419,14 @@ export default function NewCriminalPage() {
   };
 
   const getEvidenceIcon = (type: string) => {
-    const evidenceType = EVIDENCE_TYPES.find(t => t.value === type);
+    const evidenceType = EVIDENCE_TYPES.find((t) => t.value === type);
     return evidenceType ? evidenceType.icon : File;
   };
+
+  const capturedFingerprintCount = Object.keys(fingerprintPreviews).length;
+
+  // Only non-fingerprint items shown in the "Other Evidence" list
+  const otherEvidenceItems = evidenceItems.filter((e) => e.type !== 'FINGERPRINT');
 
   return (
     <div className="space-y-6">
@@ -379,7 +489,7 @@ export default function NewCriminalPage() {
                   className="hidden"
                 />
               </label>
-              
+
               <p className="text-sm text-gray-500 dark:text-gray-400">
                 Upload a clear photo (max 5MB). Supported formats: JPG, PNG, GIF, WebP
               </p>
@@ -632,20 +742,143 @@ export default function NewCriminalPage() {
           </div>
         </div>
 
-        {/* Criminal Evidence Section */}
+        {/* ── NEW: Fingerprint Capture section ────────────────────────────────── */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+              <Fingerprint className="w-5 h-5" />
+              Fingerprint Capture
+            </h2>
+            <span className={`text-sm font-medium px-3 py-1 rounded-full ${
+              capturedFingerprintCount === 10
+                ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                : capturedFingerprintCount > 0
+                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
+                : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+            }`}>
+              {capturedFingerprintCount}/10 captured
+            </span>
+          </div>
+
+          <div className="flex items-start gap-3 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg mb-5">
+            <Info className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-blue-800 dark:text-blue-300">
+              Upload scanned fingerprint images (JPG/PNG, max 5 MB each). You can also capture
+              or update fingerprints at any time from the criminal profile page after saving.
+            </p>
+          </div>
+
+          {capturedFingerprintCount > 0 && (
+            <div className="mb-5">
+              <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    capturedFingerprintCount === 10 ? 'bg-green-500' : 'bg-blue-500'
+                  }`}
+                  style={{ width: `${(capturedFingerprintCount / 10) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {(['right', 'left'] as const).map((hand) => (
+            <div key={hand} className="mb-6">
+              <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3">
+                {hand === 'right' ? 'Right Hand' : 'Left Hand'}
+              </h3>
+              <div className="grid grid-cols-5 gap-3">
+                {FINGER_SLOTS.filter((f) => f.hand === hand).map((slot) => {
+                  const preview = fingerprintPreviews[slot.key];
+                  const isUploading = fingerprintUploading[slot.key];
+
+                  return (
+                    <div key={slot.key} className="flex flex-col items-center gap-2">
+                      {/* Tile */}
+                      <div className={`
+                        w-full aspect-square rounded-xl border-2 overflow-hidden flex items-center justify-center
+                        ${preview
+                          ? 'border-green-400 dark:border-green-500'
+                          : 'border-dashed border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900/40'
+                        }
+                      `}>
+                        {isUploading ? (
+                          <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+                        ) : preview ? (
+                          <img src={preview} alt={FINGER_LABEL_MAP[slot.key]} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="text-gray-200 dark:text-gray-700">
+                            <svg width="24" height="32" viewBox="0 0 24 32" fill="none">
+                              <rect x="6" y="8" width="12" height="20" rx="6" fill="currentColor" />
+                              <rect x="8" y="0" width="8" height="14" rx="4" fill="currentColor" />
+                            </svg>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Label */}
+                      <span className="text-xs text-gray-500 dark:text-gray-400 font-medium text-center">
+                        {slot.label}
+                      </span>
+
+                      {/* Upload / Re-capture */}
+                      <label className={`
+                        w-full inline-flex items-center justify-center gap-1 px-2 py-1 rounded-lg text-xs font-medium cursor-pointer transition-colors
+                        ${preview
+                          ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800 hover:bg-amber-100'
+                          : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800 hover:bg-blue-100'
+                        }
+                        ${isUploading ? 'opacity-50 pointer-events-none' : ''}
+                      `}>
+                        {isUploading ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : preview ? (
+                          <RotateCcw className="w-3 h-3" />
+                        ) : (
+                          <Upload className="w-3 h-3" />
+                        )}
+                        {preview ? 'Redo' : 'Add'}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          disabled={isUploading}
+                          onChange={(e) => handleFingerprintUpload(slot.key, e)}
+                          className="hidden"
+                        />
+                      </label>
+
+                      {/* Remove — only when captured */}
+                      {preview && (
+                        <button
+                          type="button"
+                          onClick={() => removeFingerprintPreview(slot.key)}
+                          className="text-[10px] text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 flex items-center gap-0.5"
+                        >
+                          <X className="w-2.5 h-2.5" /> Remove
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+        {/* ── /NEW ── */}
+
+        {/* Other Evidence & Documentation (non-fingerprint) */}
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-              <Fingerprint className="w-5 h-5" />
-              Criminal Evidence & Documentation
+              <FileText className="w-5 h-5" />
+              Other Evidence & Documentation
             </h2>
             <span className="text-sm text-gray-500 dark:text-gray-400">
-              {evidenceItems.length} item{evidenceItems.length !== 1 ? 's' : ''}
+              {otherEvidenceItems.length} item{otherEvidenceItems.length !== 1 ? 's' : ''}
             </span>
           </div>
 
           <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-            Upload supporting evidence such as additional photos, fingerprints, documents, or other relevant materials.
+            Upload additional photos, documents, or other relevant materials (not fingerprints).
           </p>
 
           {/* Add Evidence Button */}
@@ -664,19 +897,19 @@ export default function NewCriminalPage() {
           {showEvidenceForm && (
             <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4 mb-4 border border-gray-200 dark:border-gray-700">
               <h3 className="font-medium text-gray-900 dark:text-white mb-4">Add New Evidence</h3>
-              
+
               <div className="space-y-4">
-                {/* Evidence Type */}
+                {/* Evidence Type — only PHOTO, DOCUMENT, OTHER */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Evidence Type <span className="text-red-500">*</span>
                   </label>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                     {EVIDENCE_TYPES.map(({ value, label, icon: Icon }) => (
                       <button
                         key={value}
                         type="button"
-                        onClick={() => setCurrentEvidence(prev => ({ ...prev, type: value as any }))}
+                        onClick={() => setCurrentEvidence((prev) => ({ ...prev, type: value as any }))}
                         className={`flex flex-col items-center gap-2 p-3 rounded-lg border-2 transition-all ${
                           currentEvidence.type === value
                             ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300'
@@ -696,7 +929,6 @@ export default function NewCriminalPage() {
                     Upload File <span className="text-red-500">*</span>
                   </label>
                   <div className="flex items-start gap-4">
-                    {/* Preview */}
                     {evidencePreview && (
                       <div className="w-24 h-24 rounded-lg overflow-hidden border border-gray-300 dark:border-gray-600 flex-shrink-0">
                         <img
@@ -706,8 +938,7 @@ export default function NewCriminalPage() {
                         />
                       </div>
                     )}
-                    
-                    {/* Upload Button */}
+
                     <div className="flex-1">
                       <label className="inline-flex items-center gap-2 px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg cursor-pointer transition-colors">
                         {uploading ? (
@@ -750,8 +981,8 @@ export default function NewCriminalPage() {
                   <input
                     type="text"
                     value={currentEvidence.title || ''}
-                    onChange={(e) => setCurrentEvidence(prev => ({ ...prev, title: e.target.value }))}
-                    placeholder="e.g., Mugshot - Front View, Left Fingerprint, ID Copy"
+                    onChange={(e) => setCurrentEvidence((prev) => ({ ...prev, title: e.target.value }))}
+                    placeholder="e.g., Mugshot - Front View, ID Copy"
                     className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -763,7 +994,7 @@ export default function NewCriminalPage() {
                   </label>
                   <textarea
                     value={currentEvidence.description || ''}
-                    onChange={(e) => setCurrentEvidence(prev => ({ ...prev, description: e.target.value }))}
+                    onChange={(e) => setCurrentEvidence((prev) => ({ ...prev, description: e.target.value }))}
                     placeholder="Add any relevant details about this evidence..."
                     rows={3}
                     className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
@@ -792,23 +1023,26 @@ export default function NewCriminalPage() {
             </div>
           )}
 
-          {/* Evidence List */}
-          {evidenceItems.length > 0 && (
+          {/* Evidence List — non-fingerprint items only */}
+          {otherEvidenceItems.length > 0 && (
             <div className="space-y-3 mt-4">
               <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 Uploaded Evidence
               </h3>
               <div className="grid grid-cols-1 gap-3">
-                {evidenceItems.map((item, index) => {
+                {otherEvidenceItems.map((item, index) => {
                   const Icon = getEvidenceIcon(item.type);
                   const isImage = item.mimeType?.startsWith('image/');
-                  
+                  // find real index in full evidenceItems array for removal
+                  const realIndex = evidenceItems.findIndex(
+                    (e) => e.type === item.type && e.title === item.title && e.fileUrl === item.fileUrl
+                  );
+
                   return (
                     <div
                       key={index}
                       className="flex items-start gap-4 p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700"
                     >
-                      {/* Preview or Icon */}
                       <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-200 dark:bg-gray-700 flex items-center justify-center flex-shrink-0">
                         {isImage ? (
                           <img
@@ -821,7 +1055,6 @@ export default function NewCriminalPage() {
                         )}
                       </div>
 
-                      {/* Details */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
@@ -842,8 +1075,7 @@ export default function NewCriminalPage() {
                               </p>
                             )}
                           </div>
-                          
-                          {/* Actions */}
+
                           <div className="flex items-center gap-1">
                             {isImage && (
                               <a
@@ -858,7 +1090,7 @@ export default function NewCriminalPage() {
                             )}
                             <button
                               type="button"
-                              onClick={() => removeEvidence(index)}
+                              onClick={() => removeEvidence(realIndex)}
                               className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
                               title="Remove"
                             >
@@ -922,7 +1154,7 @@ export default function NewCriminalPage() {
           </Link>
           <button
             type="submit"
-            disabled={loading || uploading}
+            disabled={loading || uploading || Object.values(fingerprintUploading).some(Boolean)}
             className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? (

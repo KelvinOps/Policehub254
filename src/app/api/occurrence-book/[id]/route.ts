@@ -8,17 +8,14 @@ import {
 } from '@/lib/db/queries/occurrence-book';
 import { IncidentCategory, IncidentStatus } from '@prisma/client';
 
-/**
- * GET /api/occurrence-book/[id]
- * Fetch a single OB entry by ID
- */
+// ─── GET /api/occurrence-book/[id] ───────────────────────────────────────────
+
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
     const user = await getUserFromRequest(request);
-
     if (!user) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
@@ -26,55 +23,62 @@ export async function GET(
       );
     }
 
-    const obEntry = await getOBEntryById(params.id);
+    const entry = await getOBEntryById(params.id);
 
-    if (!obEntry) {
+    if (!entry) {
       return NextResponse.json(
         { success: false, error: 'OB entry not found' },
         { status: 404 }
       );
     }
 
-    // Check if user has access to this entry
+    // Non-admins can only view entries from their own station
     const adminRoles = ['SUPER_ADMIN', 'ADMIN', 'STATION_COMMANDER'];
-    const hasAccess = 
-      adminRoles.includes(user.role) || 
-      obEntry.stationId === user.stationId;
-
-    if (!hasAccess) {
+    if (!adminRoles.includes(user.role) && entry.stationId !== user.stationId) {
       return NextResponse.json(
-        { success: false, error: 'Access denied' },
+        { success: false, error: 'Forbidden' },
         { status: 403 }
       );
     }
 
-    return NextResponse.json({
-      success: true,
-      data: obEntry,
-    });
+    // Remap Prisma uppercase relation names → lowercase for the frontend
+    // Schema has: entry.Station, entry.User, entry.Case
+    // View/edit pages expect: entry.station, entry.recordedBy, entry.case
+    const remapped = {
+      ...entry,
+      station: entry.Station,
+      recordedBy: entry.User,
+      case: entry.Case
+        ? {
+            ...entry.Case,
+            assignedTo:
+              (entry.Case as any).User_Case_assignedToIdToUser ?? undefined,
+            User_Case_assignedToIdToUser: undefined,
+          }
+        : undefined,
+      Station: undefined,
+      User: undefined,
+      Case: undefined,
+    };
+
+    return NextResponse.json({ success: true, data: remapped });
   } catch (error) {
     console.error('Error fetching OB entry:', error);
     return NextResponse.json(
-      {
-        success: false,
-        error: 'Failed to fetch OB entry',
-      },
+      { success: false, error: 'Failed to fetch OB entry' },
       { status: 500 }
     );
   }
 }
 
-/**
- * PATCH /api/occurrence-book/[id]
- * Update an OB entry
- */
+// ─── PATCH /api/occurrence-book/[id] ─────────────────────────────────────────
+
 export async function PATCH(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
     const user = await getUserFromRequest(request);
-
     if (!user) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
@@ -82,125 +86,101 @@ export async function PATCH(
       );
     }
 
-    // Check if entry exists and user has access
-    const existingEntry = await getOBEntryById(params.id);
-
-    if (!existingEntry) {
+    const existing = await getOBEntryById(params.id);
+    if (!existing) {
       return NextResponse.json(
         { success: false, error: 'OB entry not found' },
         { status: 404 }
       );
     }
 
-    // Check permissions
+    // Admin roles OR the officer who recorded it OR same station
     const adminRoles = ['SUPER_ADMIN', 'ADMIN', 'STATION_COMMANDER'];
-    const canEdit = 
-      adminRoles.includes(user.role) || 
-      existingEntry.recordedById === user.id ||
-      existingEntry.stationId === user.stationId;
+    const canEdit =
+      adminRoles.includes(user.role) ||
+      existing.recordedById === user.id ||
+      existing.stationId === user.stationId;
 
     if (!canEdit) {
       return NextResponse.json(
-        { success: false, error: 'You do not have permission to edit this entry' },
+        { success: false, error: 'Forbidden - insufficient permissions' },
         { status: 403 }
       );
     }
 
-    // Parse request body
-    const body = await request.json();
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { success: false, error: 'Invalid JSON body' },
+        { status: 400 }
+      );
+    }
 
-    // Validate and prepare update data
+    // Build update payload — only include fields that were sent
     const updateData: any = {};
-
-    if (body.incidentDate) {
+    if (body.incidentDate !== undefined)
       updateData.incidentDate = new Date(body.incidentDate);
-    }
-
-    if (body.category) {
+    if (body.category !== undefined)
       updateData.category = body.category as IncidentCategory;
-    }
-
-    if (body.description !== undefined) {
-      if (body.description.length < 20) {
-        return NextResponse.json(
-          { success: false, error: 'Description must be at least 20 characters' },
-          { status: 400 }
-        );
-      }
+    if (body.description !== undefined)
       updateData.description = body.description;
-    }
-
-    if (body.location !== undefined) {
-      updateData.location = body.location;
-    }
-
-    if (body.latitude !== undefined) {
-      updateData.latitude = body.latitude ? parseFloat(body.latitude) : null;
-    }
-
-    if (body.longitude !== undefined) {
-      updateData.longitude = body.longitude ? parseFloat(body.longitude) : null;
-    }
-
-    if (body.status) {
-      updateData.status = body.status as IncidentStatus;
-    }
-
-    if (body.reportedBy !== undefined) {
-      updateData.reportedBy = body.reportedBy;
-    }
-
-    if (body.contactNumber !== undefined) {
+    if (body.location !== undefined) updateData.location = body.location;
+    if (body.latitude !== undefined)
+      updateData.latitude =
+        body.latitude !== null && body.latitude !== ''
+          ? parseFloat(body.latitude)
+          : null;
+    if (body.longitude !== undefined)
+      updateData.longitude =
+        body.longitude !== null && body.longitude !== ''
+          ? parseFloat(body.longitude)
+          : null;
+    if (body.reportedBy !== undefined) updateData.reportedBy = body.reportedBy;
+    if (body.contactNumber !== undefined)
       updateData.contactNumber = body.contactNumber;
-    }
+    if (body.status !== undefined)
+      updateData.status = body.status as IncidentStatus;
+    if (body.witnesses !== undefined) updateData.witnesses = body.witnesses;
+    if (body.suspects !== undefined) updateData.suspects = body.suspects;
+    if (body.caseId !== undefined) updateData.caseId = body.caseId;
 
-    if (body.evidenceFiles !== undefined) {
-      updateData.evidenceFiles = body.evidenceFiles;
-    }
+    const updated = await updateOBEntry(params.id, updateData);
 
-    if (body.witnesses !== undefined) {
-      updateData.witnesses = body.witnesses;
-    }
-
-    if (body.suspects !== undefined) {
-      updateData.suspects = body.suspects;
-    }
-
-    if (body.caseId !== undefined) {
-      updateData.caseId = body.caseId;
-    }
-
-    // Update the entry
-    const updatedEntry = await updateOBEntry(params.id, updateData);
+    // Remap for frontend
+    const remapped = {
+      ...updated,
+      station: updated.Station,
+      recordedBy: updated.User,
+      case: updated.Case ?? undefined,
+      Station: undefined,
+      User: undefined,
+      Case: undefined,
+    };
 
     return NextResponse.json({
       success: true,
-      data: updatedEntry,
+      data: remapped,
       message: 'OB entry updated successfully',
     });
   } catch (error) {
     console.error('Error updating OB entry:', error);
     return NextResponse.json(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to update OB entry',
-      },
+      { success: false, error: 'Failed to update OB entry' },
       { status: 500 }
     );
   }
 }
 
-/**
- * DELETE /api/occurrence-book/[id]
- * Delete an OB entry
- */
+// ─── DELETE /api/occurrence-book/[id] ────────────────────────────────────────
+
 export async function DELETE(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
     const user = await getUserFromRequest(request);
-
     if (!user) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
@@ -208,41 +188,22 @@ export async function DELETE(
       );
     }
 
-    // Check if entry exists
-    const existingEntry = await getOBEntryById(params.id);
+    const deleteRoles = ['SUPER_ADMIN', 'ADMIN', 'STATION_COMMANDER'];
+    if (!deleteRoles.includes(user.role)) {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden - insufficient permissions to delete' },
+        { status: 403 }
+      );
+    }
 
-    if (!existingEntry) {
+    const existing = await getOBEntryById(params.id);
+    if (!existing) {
       return NextResponse.json(
         { success: false, error: 'OB entry not found' },
         { status: 404 }
       );
     }
 
-    // Only SUPER_ADMIN, ADMIN, and STATION_COMMANDER can delete
-    const canDelete = ['SUPER_ADMIN', 'ADMIN', 'STATION_COMMANDER'].includes(user.role);
-
-    if (!canDelete) {
-      return NextResponse.json(
-        { 
-          success: false, 
-          error: 'You do not have permission to delete OB entries. Only administrators can delete records.' 
-        },
-        { status: 403 }
-      );
-    }
-
-    // Check if entry has associated case
-    if (existingEntry.caseId) {
-      return NextResponse.json(
-        { 
-          success: false, 
-          error: 'Cannot delete OB entry with associated case. Close the case first.' 
-        },
-        { status: 400 }
-      );
-    }
-
-    // Delete the entry
     await deleteOBEntry(params.id);
 
     return NextResponse.json({
@@ -252,10 +213,7 @@ export async function DELETE(
   } catch (error) {
     console.error('Error deleting OB entry:', error);
     return NextResponse.json(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to delete OB entry',
-      },
+      { success: false, error: 'Failed to delete OB entry' },
       { status: 500 }
     );
   }

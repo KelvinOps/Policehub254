@@ -1,3 +1,5 @@
+//lib/auth/case-permissions.ts
+
 import { UserRole, IncidentCategory } from '@prisma/client';
 import { Case, SessionUser } from '@/types/case';
 

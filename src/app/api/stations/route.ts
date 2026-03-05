@@ -1,8 +1,6 @@
 // src/app/api/stations/route.ts
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '@/lib/db/prisma'; // FIX: Use shared singleton, NOT new PrismaClient()
 
 export async function GET() {
   try {

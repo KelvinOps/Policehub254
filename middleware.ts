@@ -1,4 +1,6 @@
-// middleware.ts (root level)
+// middleware.ts — root of project (same level as /src or /app)
+
+
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import jwt from 'jsonwebtoken';
@@ -6,173 +8,147 @@ import jwt from 'jsonwebtoken';
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
 interface JWTPayload {
-  id: string;
-  email: string;
-  role: string;
-  stationId?: string;
+  id:           string;
+  email:        string;
+  role:         string;
+  name?:        string;
+  stationId?:   string;
+  badgeNumber?: string;
+}
+
+// Pages that don't require a token
+const PUBLIC_PAGES = new Set([
+  '/',
+  '/login',
+  '/register',
+  '/forgot-password',
+  '/reset-password',
+  '/report-crime',
+  '/stations',
+  '/lost-found',
+  '/clearance',
+  '/tips',
+]);
+
+// API routes that are open without a token
+const PUBLIC_API_PREFIXES = [
+  '/api/auth/login',
+  '/api/auth/register',
+  '/api/auth/verify',
+  '/api/auth/forgot-password',
+  '/api/auth/reset-password',
+  '/api/public',
+  '/api/health',
+  '/api/webhooks',
+  '/api/stations',
+];
+
+function isPublicPage(pathname: string): boolean {
+  if (PUBLIC_PAGES.has(pathname)) return true;
+  // Allow sub-paths of public pages (e.g. /report-crime/submit)
+  for (const p of PUBLIC_PAGES) {
+    if (p !== '/' && pathname.startsWith(p + '/')) return true;
+  }
+  return false;
+}
+
+function isPublicApi(pathname: string): boolean {
+  return PUBLIC_API_PREFIXES.some(p => pathname.startsWith(p));
 }
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  
-  console.log('🔒 Middleware running for:', pathname);
 
-  // Public routes that don't require authentication
-  const publicRoutes = [
-    '/',
-    '/login',
-    '/register',
-    '/forgot-password',
-    '/reset-password',
-    '/report-crime',
-    '/stations',
-    '/lost-found',
-    '/clearance',
-    '/tips',
-  ];
-
-  // API routes that should be public
-  const publicApiRoutes = [
-    '/api/auth/login',
-    '/api/auth/register',
-    '/api/auth/verify',
-    '/api/auth/forgot-password',
-    '/api/auth/reset-password',
-    '/api/public',
-    '/api/health',
-    '/api/webhooks',
-    '/api/stations',  // Make stations public for registration
-  ];
-
-  // Check if route is public
-  const isPublicRoute = publicRoutes.some(route => 
-    pathname === route || pathname.startsWith(route + '/')
-  );
-
-  const isPublicApiRoute = publicApiRoutes.some(route =>
-    pathname.startsWith(route)
-  );
-
-  // Get token from cookie
   const token = request.cookies.get('auth-token')?.value;
-  console.log('Token present:', !!token);
 
-  // Allow public routes and public API routes
-  if (isPublicRoute || isPublicApiRoute) {
-    console.log('✅ Public route, allowing access');
-    
-    // If accessing auth pages with valid token, redirect to dashboard
-    if ((pathname === '/login' || pathname === '/register') && token) {
-      try {
-        jwt.verify(token, JWT_SECRET);
-        console.log('Valid token found, redirecting to dashboard');
-        return NextResponse.redirect(new URL('/dashboard', request.url));
-      } catch {
-        console.log('Invalid token, allowing access to auth pages');
-        return NextResponse.next();
-      }
+  // ── Decode token once (if present) ────────────────────────────────────────
+  let decoded: JWTPayload | null = null;
+  if (token) {
+    try {
+      decoded = jwt.verify(token, JWT_SECRET) as JWTPayload;
+    } catch {
+      decoded = null;
+    }
+  }
+
+  const isApi = pathname.startsWith('/api/');
+
+  // ── Public API routes ──────────────────────────────────────────────────────
+  // Still inject headers if we have a valid token (needed for /api/auth/logout etc.)
+  if (isPublicApi(pathname)) {
+    if (decoded) {
+      const headers = buildUserHeaders(request, decoded);
+      return NextResponse.next({ request: { headers } });
     }
     return NextResponse.next();
   }
 
-  // Protected routes - require authentication
-  if (!token) {
-    console.log('❌ No token found for protected route');
-    
-    // For API routes, return 401
-    if (pathname.startsWith('/api/')) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized - No token' },
+  // ── Public pages ───────────────────────────────────────────────────────────
+  if (isPublicPage(pathname)) {
+    // Already logged in → bounce to dashboard
+    if ((pathname === '/login' || pathname === '/register') && decoded) {
+      return NextResponse.redirect(new URL('/dashboard', request.url));
+    }
+    return NextResponse.next();
+  }
+
+  // ── Everything else is protected ───────────────────────────────────────────
+  if (!decoded) {
+    // Invalid / missing token — clear stale cookie and redirect
+    if (isApi) {
+      const res = NextResponse.json(
+        { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
+      res.cookies.set('auth-token', '', { maxAge: 0, path: '/' });
+      return res;
     }
-    // For page routes, redirect to login
     const loginUrl = new URL('/login', request.url);
     loginUrl.searchParams.set('callbackUrl', pathname);
-    return NextResponse.redirect(loginUrl);
+    const res = NextResponse.redirect(loginUrl);
+    res.cookies.set('auth-token', '', { maxAge: 0, path: '/' });
+    return res;
   }
 
-  // Verify token
-  try {
-    console.log('Verifying token...');
-    console.log('JWT_SECRET (first 10 chars):', JWT_SECRET.substring(0, 10));
-    
-    const decoded = jwt.verify(token, JWT_SECRET) as JWTPayload;
-    console.log('✅ Token verified successfully:', {
-      id: decoded.id,
-      email: decoded.email,
-      role: decoded.role,
-      hasStationId: !!decoded.stationId,
-    });
-    
-    // Add user info to request headers for API routes
-    const requestHeaders = new Headers(request.headers);
-    requestHeaders.set('x-user-id', decoded.id);
-    requestHeaders.set('x-user-role', decoded.role);
-    if (decoded.stationId) {
-      requestHeaders.set('x-user-station', decoded.stationId);
-    }
-    
-    console.log('Headers set:', {
-      'x-user-id': decoded.id,
-      'x-user-role': decoded.role,
-      'x-user-station': decoded.stationId || 'none',
-    });
-
-    // Role-based access control
-    if (pathname.startsWith('/dashboard/settings/users') || pathname.startsWith('/dashboard/settings/stations')) {
-      const adminRoles = ['SUPER_ADMIN', 'ADMIN', 'STATION_COMMANDER'];
-      if (!adminRoles.includes(decoded.role)) {
-        console.log('❌ Insufficient permissions for admin area');
-        if (pathname.startsWith('/api/')) {
-          return NextResponse.json(
-            { success: false, error: 'Forbidden - Insufficient permissions' },
-            { status: 403 }
-          );
-        }
-        return NextResponse.redirect(new URL('/dashboard', request.url));
+  // ── Role-based access (admin-only areas) ───────────────────────────────────
+  const adminOnlyPrefixes = [
+    '/dashboard/settings/users',
+    '/dashboard/settings/stations',
+  ];
+  const needsAdmin = adminOnlyPrefixes.some(p => pathname.startsWith(p));
+  if (needsAdmin) {
+    const adminRoles = ['SUPER_ADMIN', 'ADMIN', 'STATION_COMMANDER'];
+    if (!adminRoles.includes(decoded.role)) {
+      if (isApi) {
+        return NextResponse.json(
+          { success: false, error: 'Forbidden' },
+          { status: 403 }
+        );
       }
+      return NextResponse.redirect(new URL('/dashboard', request.url));
     }
-
-    console.log('✅ Access granted');
-    return NextResponse.next({
-      request: {
-        headers: requestHeaders,
-      },
-    });
-  } catch (error) {
-    // Invalid or expired token
-    console.error('❌ Token verification failed:', error);
-    
-    if (error instanceof Error) {
-      console.error('Error details:', {
-        name: error.name,
-        message: error.message,
-      });
-    }
-
-    // Clear the invalid token
-    const response = pathname.startsWith('/api/')
-      ? NextResponse.json(
-          { success: false, error: 'Invalid or expired token' },
-          { status: 401 }
-        )
-      : NextResponse.redirect(new URL('/login', request.url));
-
-    response.cookies.delete('auth-token');
-    return response;
   }
+
+  // ── Inject user headers and proceed ───────────────────────────────────────
+  const headers = buildUserHeaders(request, decoded);
+  return NextResponse.next({ request: { headers } });
+}
+
+// ── Helper: build request headers with user identity ──────────────────────────
+function buildUserHeaders(request: NextRequest, user: JWTPayload): Headers {
+  const headers = new Headers(request.headers);
+  headers.set('x-user-id',    user.id);
+  headers.set('x-user-email', user.email);
+  headers.set('x-user-role',  user.role);
+  if (user.name)        headers.set('x-user-name',    user.name);
+  if (user.stationId)   headers.set('x-user-station', user.stationId);
+  if (user.badgeNumber) headers.set('x-user-badge',   user.badgeNumber);
+  return headers;
 }
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public files (images, etc.)
-     */
+    // Run on everything except Next.js internals and static assets
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };

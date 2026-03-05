@@ -1,4 +1,4 @@
-// src/components/layout/Sidebar.tsx - UPDATED WITH SEARCH & REPORTS
+// src/components/layout/Sidebar.tsx - FIXED VERSION
 "use client";
 
 import { useState, useEffect } from "react";
@@ -209,7 +209,7 @@ const defaultNavigationItems: NavItem[] = [
     children: [
       { name: "Incidents", href: "/dashboard/traffic/incidents" },
       { name: "Accidents", href: "/dashboard/traffic/accidents" },
-      { name: "Impounds", href: "/dashboard/traffic/impounds" },
+      { name: "Impounds", href: "/dashboard/traffic/impound" },
     ],
   },
   {
@@ -252,14 +252,47 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true); // Add loading state
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
 
-  // Fetch user data and auto-expand current section
+  // Initialize user from localStorage synchronously
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
+    // Try to get user from localStorage immediately
+    const initializeUser = () => {
+      try {
+        const storedUser = localStorage.getItem('user');
+        if (storedUser) {
+          const parsedUser = JSON.parse(storedUser);
+          setUser(parsedUser);
+          console.log('User loaded from localStorage:', parsedUser);
+        }
+      } catch (error) {
+        console.error('Error parsing user from localStorage:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    initializeUser();
+
+    // Also fetch from API to ensure we have the latest data
+    const fetchUserFromAPI = async () => {
+      try {
+        const response = await fetch('/api/auth/me');
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.user) {
+            setUser(data.user);
+            // Update localStorage with latest user data
+            localStorage.setItem('user', JSON.stringify(data.user));
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching user from API:', error);
+      }
+    };
+
+    fetchUserFromAPI();
 
     // Auto-expand the section that matches current path
     const currentSection = defaultNavigationItems.find(item => {
@@ -303,17 +336,81 @@ export function Sidebar() {
   };
 
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
-    localStorage.removeItem('user');
-    router.push('/login');
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      localStorage.removeItem('user');
+      router.push('/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+      // Still redirect even if API fails
+      localStorage.removeItem('user');
+      router.push('/login');
+    }
   };
 
+  // Show loading spinner only briefly, then show navigation skeleton
+  if (isLoading) {
+    return (
+      <div className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-64 lg:flex-col">
+        <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 px-6 pb-4">
+          {/* Logo skeleton */}
+          <div className="flex h-16 shrink-0 items-center border-b border-gray-200 dark:border-gray-700">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded-lg animate-pulse"></div>
+              <div>
+                <div className="h-5 w-16 bg-gray-200 dark:bg-gray-700 rounded animate-pulse mb-1"></div>
+                <div className="h-3 w-20 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
+              </div>
+            </div>
+          </div>
+          
+          {/* Navigation skeleton */}
+          <div className="flex-1 space-y-4 py-4">
+            {[...Array(8)].map((_, i) => (
+              <div key={i} className="space-y-2">
+                <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded-lg animate-pulse"></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // If still no user after loading, show minimal sidebar with login prompt
   if (!user) {
     return (
       <div className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-64 lg:flex-col">
         <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 px-6 pb-4">
-          <div className="flex h-16 shrink-0 items-center justify-center border-b border-gray-200 dark:border-gray-700">
-            <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary-600"></div>
+          {/* Logo */}
+          <div className="flex h-16 shrink-0 items-center border-b border-gray-200 dark:border-gray-700">
+            <Link href="/dashboard" className="flex items-center gap-3">
+              <div className="relative">
+                <div className="w-10 h-10 bg-gradient-to-br from-blue-500 via-cyan-500 to-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-500/50">
+                  <Shield className="w-6 h-6 text-white" />
+                </div>
+              </div>
+              <div>
+                <h1 className="text-lg font-bold bg-gradient-to-r from-gray-900 to-gray-700 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">
+                  KPS
+                </h1>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Police Hub
+                </p>
+              </div>
+            </Link>
+          </div>
+
+          {/* Login prompt */}
+          <div className="flex-1 flex flex-col items-center justify-center text-center">
+            <Shield className="w-12 h-12 text-gray-400 mb-3" />
+            <p className="text-gray-600 dark:text-gray-400 mb-4">Please log in to access the sidebar</p>
+            <button
+              onClick={() => router.push('/login')}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Go to Login
+            </button>
           </div>
         </div>
       </div>
@@ -467,11 +564,11 @@ export function Sidebar() {
               {/* User Profile Card */}
               <div className="flex items-center gap-x-3 px-3 py-3 text-sm font-semibold leading-6 bg-gradient-to-r from-gray-50 to-blue-50 dark:from-gray-700/50 dark:to-blue-900/20 rounded-xl border border-gray-200 dark:border-gray-700">
                 <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-600 to-cyan-600 flex items-center justify-center text-white font-bold shadow-lg">
-                  {user.name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)}
+                  {user.name ? user.name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) : 'U'}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                    {user.name}
+                    {user.name || 'Officer'}
                   </p>
                   <p className="text-xs text-gray-500 dark:text-gray-400">
                     Badge: {user.badgeNumber || 'N/A'}
@@ -485,7 +582,7 @@ export function Sidebar() {
                   Current Role
                 </p>
                 <p className="text-sm font-medium text-blue-600 dark:text-blue-400">
-                  {user.role.replace(/_/g, ' ')}
+                  {user.role ? user.role.replace(/_/g, ' ') : 'Unknown'}
                 </p>
                 {user.stationName && (
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">

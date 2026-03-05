@@ -6,13 +6,15 @@ const prisma = new PrismaClient();
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
+
     const criminal = await prisma.criminal.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: {
-        station: {
+        Station: {
           select: {
             id: true,
             name: true,
@@ -32,7 +34,7 @@ export async function GET(
             createdAt: 'desc',
           },
         },
-        evidenceItems: {
+        CriminalEvidence: {
           orderBy: {
             createdAt: 'desc',
           },
@@ -47,9 +49,15 @@ export async function GET(
       );
     }
 
+    // Remap CriminalEvidence to evidenceItems so the frontend page.tsx works unchanged
+    const response = {
+      ...criminal,
+      evidenceItems: criminal.CriminalEvidence,
+    };
+
     return NextResponse.json({
       success: true,
-      data: criminal,
+      data: response,
     });
   } catch (error) {
     console.error('Error fetching criminal:', error);
@@ -64,17 +72,18 @@ export async function GET(
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const body = await request.json();
     const userId = request.headers.get('x-user-id') || 'SYSTEM';
+    const { id } = await params;
 
-    console.log('Updating criminal:', params.id, body);
+    console.log('Updating criminal:', id, body);
 
     // Verify criminal exists
     const existingCriminal = await prisma.criminal.findUnique({
-      where: { id: params.id },
+      where: { id },
     });
 
     if (!existingCriminal) {
@@ -103,7 +112,7 @@ export async function PUT(
     if (body.photoUrl !== undefined) updateData.photoUrl = body.photoUrl || null;
     if (body.lastKnownLocation !== undefined) updateData.lastKnownLocation = body.lastKnownLocation?.trim() || null;
     if (body.stationId) updateData.stationId = body.stationId;
-    
+
     if (body.isWanted && body.wantedReason) {
       updateData.wantedReason = body.wantedReason.trim();
     } else if (!body.isWanted) {
@@ -118,17 +127,17 @@ export async function PUT(
 
     // Update criminal record
     const criminal = await prisma.criminal.update({
-      where: { id: params.id },
+      where: { id },
       data: updateData,
       include: {
-        station: {
+        Station: {
           select: {
             id: true,
             name: true,
             code: true,
           },
         },
-        evidenceItems: {
+        CriminalEvidence: {
           orderBy: {
             createdAt: 'desc',
           },
@@ -139,7 +148,7 @@ export async function PUT(
     // Add new evidence items if provided
     if (body.evidenceItems && Array.isArray(body.evidenceItems) && body.evidenceItems.length > 0) {
       console.log('Adding new evidence items:', body.evidenceItems.length);
-      
+
       const evidenceData = body.evidenceItems.map((item: any) => ({
         criminalId: criminal.id,
         type: item.type || 'OTHER',
@@ -163,14 +172,14 @@ export async function PUT(
     const completeCriminal = await prisma.criminal.findUnique({
       where: { id: criminal.id },
       include: {
-        station: {
+        Station: {
           select: {
             id: true,
             name: true,
             code: true,
           },
         },
-        evidenceItems: {
+        CriminalEvidence: {
           orderBy: {
             createdAt: 'desc',
           },
@@ -178,30 +187,38 @@ export async function PUT(
       },
     });
 
+    // Remap CriminalEvidence to evidenceItems so the frontend page.tsx works unchanged
+    const response = completeCriminal
+      ? {
+          ...completeCriminal,
+          evidenceItems: completeCriminal.CriminalEvidence,
+        }
+      : null;
+
     return NextResponse.json({
       success: true,
-      data: completeCriminal,
+      data: response,
       message: 'Criminal record updated successfully',
     });
   } catch (error: any) {
     console.error('Error updating criminal:', error);
-    
+
     if (error.code === 'P2002') {
       return NextResponse.json(
-        { 
-          success: false, 
+        {
+          success: false,
           error: 'A record with this ID number already exists',
-          details: error.meta
+          details: error.meta,
         },
         { status: 400 }
       );
     }
-    
+
     return NextResponse.json(
-      { 
-        success: false, 
+      {
+        success: false,
         error: 'Failed to update criminal record',
-        details: error.message 
+        details: error.message,
       },
       { status: 500 }
     );
@@ -212,14 +229,16 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    console.log('Deleting criminal:', params.id);
+    const { id } = await params;
+
+    console.log('Deleting criminal:', id);
 
     // Verify criminal exists
     const existingCriminal = await prisma.criminal.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: {
         cases: true,
       },
@@ -235,9 +254,9 @@ export async function DELETE(
     // Check if criminal has associated cases
     if (existingCriminal.cases.length > 0) {
       return NextResponse.json(
-        { 
-          success: false, 
-          error: 'Cannot delete criminal with associated cases. Please remove case associations first.' 
+        {
+          success: false,
+          error: 'Cannot delete criminal with associated cases. Please remove case associations first.',
         },
         { status: 400 }
       );
@@ -245,12 +264,12 @@ export async function DELETE(
 
     // Delete evidence items first (cascade should handle this, but being explicit)
     await prisma.criminalEvidence.deleteMany({
-      where: { criminalId: params.id },
+      where: { criminalId: id },
     });
 
     // Delete the criminal record
     await prisma.criminal.delete({
-      where: { id: params.id },
+      where: { id },
     });
 
     console.log('Criminal deleted successfully');
@@ -261,12 +280,12 @@ export async function DELETE(
     });
   } catch (error: any) {
     console.error('Error deleting criminal:', error);
-    
+
     return NextResponse.json(
-      { 
-        success: false, 
+      {
+        success: false,
         error: 'Failed to delete criminal record',
-        details: error.message 
+        details: error.message,
       },
       { status: 500 }
     );

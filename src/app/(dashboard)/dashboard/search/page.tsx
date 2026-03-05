@@ -1,4 +1,3 @@
-// src/app/(dashboard)/dashboard/search/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -9,7 +8,6 @@ import {
   Download,
   Calendar,
   MapPin,
-  User,
   FileText,
   AlertCircle,
   ChevronDown,
@@ -17,7 +15,6 @@ import {
   X,
   Loader2,
   TrendingUp,
-  BarChart3,
 } from 'lucide-react';
 import { IncidentCategory, IncidentStatus } from '@prisma/client';
 import {
@@ -39,6 +36,7 @@ interface SearchFilters {
   location: string;
 }
 
+// FIX: Capital S to match Prisma relation name returned by API
 interface SearchResult {
   id: string;
   obNumber: string;
@@ -48,7 +46,7 @@ interface SearchResult {
   location: string;
   status: IncidentStatus;
   reportedBy: string;
-  station: {
+  Station: {
     name: string;
     code: string;
   };
@@ -58,9 +56,10 @@ export default function AdvancedSearchPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [hasSearched, setHasSearched] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [totalResults, setTotalResults] = useState(0);
-  
+
   const [filters, setFilters] = useState<SearchFilters>({
     searchTerm: '',
     category: '',
@@ -71,7 +70,9 @@ export default function AdvancedSearchPage() {
     location: '',
   });
 
-  const [stations, setStations] = useState<Array<{ id: string; name: string }>>([]);
+  const [stations, setStations] = useState<Array<{ id: string; name: string }>>(
+    []
+  );
 
   useEffect(() => {
     fetchStations();
@@ -92,8 +93,9 @@ export default function AdvancedSearchPage() {
   const handleSearch = async () => {
     try {
       setLoading(true);
+      setHasSearched(true);
+
       const params = new URLSearchParams();
-      
       if (filters.searchTerm) params.append('search', filters.searchTerm);
       if (filters.category) params.append('category', filters.category);
       if (filters.status) params.append('status', filters.status);
@@ -131,7 +133,7 @@ export default function AdvancedSearchPage() {
       params.append('format', format);
 
       const response = await fetch(`/api/occurrence-book/report?${params}`);
-      
+
       if (format === 'csv') {
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
@@ -139,15 +141,18 @@ export default function AdvancedSearchPage() {
         a.href = url;
         a.download = `ob-report-${Date.now()}.csv`;
         a.click();
+        window.URL.revokeObjectURL(url);
       } else {
         const data = await response.json();
-        const jsonStr = JSON.stringify(data, null, 2);
-        const blob = new Blob([jsonStr], { type: 'application/json' });
+        const blob = new Blob([JSON.stringify(data, null, 2)], {
+          type: 'application/json',
+        });
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = `ob-report-${Date.now()}.json`;
         a.click();
+        window.URL.revokeObjectURL(url);
       }
     } catch (error) {
       console.error('Export error:', error);
@@ -166,10 +171,12 @@ export default function AdvancedSearchPage() {
       location: '',
     });
     setResults([]);
+    setHasSearched(false);
+    setTotalResults(0);
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return new Date(dateString).toLocaleDateString('en-KE', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
@@ -248,11 +255,14 @@ export default function AdvancedSearchPage() {
                 Search Term
               </label>
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                 <input
                   type="text"
                   value={filters.searchTerm}
-                  onChange={(e) => setFilters({ ...filters, searchTerm: e.target.value })}
+                  onChange={(e) =>
+                    setFilters({ ...filters, searchTerm: e.target.value })
+                  }
+                  onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                   placeholder="Search by OB number, description, location, or reporter..."
                   className="w-full pl-10 pr-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
                 />
@@ -268,7 +278,12 @@ export default function AdvancedSearchPage() {
                 </label>
                 <select
                   value={filters.category}
-                  onChange={(e) => setFilters({ ...filters, category: e.target.value as IncidentCategory | '' })}
+                  onChange={(e) =>
+                    setFilters({
+                      ...filters,
+                      category: e.target.value as IncidentCategory | '',
+                    })
+                  }
                   className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="">All Categories</option>
@@ -287,7 +302,12 @@ export default function AdvancedSearchPage() {
                 </label>
                 <select
                   value={filters.status}
-                  onChange={(e) => setFilters({ ...filters, status: e.target.value as IncidentStatus | '' })}
+                  onChange={(e) =>
+                    setFilters({
+                      ...filters,
+                      status: e.target.value as IncidentStatus | '',
+                    })
+                  }
                   className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="">All Statuses</option>
@@ -306,7 +326,9 @@ export default function AdvancedSearchPage() {
                 </label>
                 <select
                   value={filters.stationId}
-                  onChange={(e) => setFilters({ ...filters, stationId: e.target.value })}
+                  onChange={(e) =>
+                    setFilters({ ...filters, stationId: e.target.value })
+                  }
                   className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="">All Stations</option>
@@ -324,11 +346,13 @@ export default function AdvancedSearchPage() {
                   Date From
                 </label>
                 <div className="relative">
-                  <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
                     type="date"
                     value={filters.dateFrom}
-                    onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })}
+                    onChange={(e) =>
+                      setFilters({ ...filters, dateFrom: e.target.value })
+                    }
                     className="w-full pl-10 pr-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -340,11 +364,13 @@ export default function AdvancedSearchPage() {
                   Date To
                 </label>
                 <div className="relative">
-                  <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
                     type="date"
                     value={filters.dateTo}
-                    onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })}
+                    onChange={(e) =>
+                      setFilters({ ...filters, dateTo: e.target.value })
+                    }
                     className="w-full pl-10 pr-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -356,11 +382,13 @@ export default function AdvancedSearchPage() {
                   Location
                 </label>
                 <div className="relative">
-                  <MapPin className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
                     type="text"
                     value={filters.location}
-                    onChange={(e) => setFilters({ ...filters, location: e.target.value })}
+                    onChange={(e) =>
+                      setFilters({ ...filters, location: e.target.value })
+                    }
                     placeholder="Enter location"
                     className="w-full pl-10 pr-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
                   />
@@ -392,7 +420,7 @@ export default function AdvancedSearchPage() {
         )}
       </div>
 
-      {/* Results */}
+      {/* Results Table */}
       {results.length > 0 && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
           <div className="p-6 border-b border-gray-200 dark:border-gray-700">
@@ -439,13 +467,14 @@ export default function AdvancedSearchPage() {
                   >
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-2">
-                        <FileText className="w-5 h-5 text-blue-600" />
+                        <FileText className="w-5 h-5 text-blue-600 shrink-0" />
                         <div>
                           <div className="text-sm font-medium text-gray-900 dark:text-white">
                             {result.obNumber}
                           </div>
+                          {/* FIX: result.Station.name (capital S) */}
                           <div className="text-xs text-gray-500 dark:text-gray-400">
-                            {result.station.name}
+                            {result.Station?.name ?? '—'}
                           </div>
                         </div>
                       </div>
@@ -453,13 +482,13 @@ export default function AdvancedSearchPage() {
                     <td className="px-6 py-4">
                       <div className="max-w-xs">
                         <div className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                          {result.description.substring(0, 60)}...
+                          {result.description.length > 60
+                            ? result.description.substring(0, 60) + '…'
+                            : result.description}
                         </div>
-                        <div className="flex items-center gap-4 mt-1 text-xs text-gray-500 dark:text-gray-400">
-                          <span className="flex items-center gap-1">
-                            <MapPin className="w-3 h-3" />
-                            {result.location}
-                          </span>
+                        <div className="flex items-center gap-1 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          <MapPin className="w-3 h-3" />
+                          {result.location}
                         </div>
                       </div>
                     </td>
@@ -486,7 +515,11 @@ export default function AdvancedSearchPage() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <button
-                        onClick={() => router.push(`/dashboard/occurrence-book/${result.id}`)}
+                        onClick={() =>
+                          router.push(
+                            `/dashboard/occurrence-book/${result.id}`
+                          )
+                        }
                         className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 text-sm font-medium"
                       >
                         View Details
@@ -500,15 +533,16 @@ export default function AdvancedSearchPage() {
         </div>
       )}
 
-      {/* No Results */}
-      {!loading && results.length === 0 && filters.searchTerm && (
+      {/* No Results — only shown after a search has actually been run */}
+      {!loading && hasSearched && results.length === 0 && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-12 text-center">
           <AlertCircle className="w-16 h-16 text-gray-400 mx-auto mb-4" />
           <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
             No results found
           </h3>
           <p className="text-gray-500 dark:text-gray-400">
-            Try adjusting your search filters to find what you're looking for
+            Try adjusting your search filters to find what you&apos;re looking
+            for
           </p>
         </div>
       )}

@@ -1,8 +1,7 @@
-// prisma/seed.ts
-import { PrismaClient, UserRole, IncidentCategory, IncidentStatus, CaseStatus } from '@prisma/client';
+// prisma/seed.ts - COMPLETE CORRECTED VERSION
+import { PrismaClient, UserRole, IncidentCategory, IncidentStatus, CaseStatus, Prisma, AlertType, AlertPriority } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
-import cuid from '@paralleldrive/cuid2';
-
+import { createId } from '@paralleldrive/cuid2';
 
 const prisma = new PrismaClient();
 
@@ -19,7 +18,7 @@ function randomItem<T>(array: T[]): T {
 // Helper function to get multiple random items
 function randomItems<T>(array: T[], count: number): T[] {
   const shuffled = [...array].sort(() => 0.5 - Math.random());
-  return shuffled.slice(0, count);
+  return shuffled.slice(0, Math.min(count, shuffled.length));
 }
 
 async function main() {
@@ -77,7 +76,7 @@ async function main() {
       where: { code: data.code },
       update: {},
       create: {
-        id: cuid(),
+        id: createId(),
         ...data,
         commander: null,
         capacity: Math.floor(Math.random() * 100) + 50,
@@ -107,7 +106,7 @@ async function main() {
   // Create primary admin users
   const adminUsers = [
     {
-      id: cuid(),
+      id: createId(),
       email: 'admin@police.go.ke',
       name: 'System Administrator',
       password: hashedPassword,
@@ -120,7 +119,7 @@ async function main() {
       department: 'Administration',
     },
     {
-      id: cuid(),
+      id: createId(),
       email: 'commander@police.go.ke',
       name: 'John Kamau',
       password: hashedPassword,
@@ -133,7 +132,7 @@ async function main() {
       department: 'Command',
     },
     {
-      id: cuid(),
+      id: createId(),
       email: 'detective@police.go.ke',
       name: 'Mary Wanjiku',
       password: hashedPassword,
@@ -146,7 +145,7 @@ async function main() {
       department: 'CID',
     },
     {
-      id: cuid(),
+      id: createId(),
       email: 'officer@police.go.ke',
       name: 'Peter Otieno',
       password: hashedPassword,
@@ -179,7 +178,7 @@ async function main() {
     
     const user = await prisma.user.create({
       data: {
-        id: cuid(),
+        id: createId(),
         email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}${i}@police.go.ke`,
         name: `${firstName} ${lastName}`,
         password: hashedPassword,
@@ -187,7 +186,7 @@ async function main() {
         badgeNumber: badgeNum,
         phoneNumber: `+254-7${Math.floor(Math.random() * 10)}${Math.floor(Math.random() * 10)}-${Math.floor(Math.random() * 900000 + 100000)}`,
         stationId: station.id,
-        isActive: Math.random() > 0.1, // 90% active
+        isActive: Math.random() > 0.1,
         rank: randomItem(ranks),
         department: randomItem(departments),
       },
@@ -203,13 +202,14 @@ async function main() {
   const categories: IncidentCategory[] = [
     'THEFT', 'ROBBERY', 'ASSAULT', 'MURDER', 'RAPE', 'DOMESTIC_VIOLENCE',
     'FRAUD', 'BURGLARY', 'TRAFFIC_ACCIDENT', 'KIDNAPPING', 'DRUG_RELATED',
-    'CYBERCRIME', 'CORRUPTION', 'MISSING_PERSON', 'OTHER'
+    'CYBERCRIME', 'CORRUPTION', 'MISSING_PERSON', 'SEXUAL_HARASSMENT', 'OTHER'
   ];
   
   const statuses: IncidentStatus[] = [
     'REPORTED', 'UNDER_INVESTIGATION', 'RESOLVED', 'CLOSED', 'TRANSFERRED'
   ];
   
+  // FIXED: Added missing SEXUAL_HARASSMENT category
   const incidentDescriptions: Record<IncidentCategory, string[]> = {
     THEFT: [
       'Mobile phone stolen from complainant in busy market area',
@@ -347,6 +347,15 @@ async function main() {
       'Corruption in service delivery reported',
       'Embezzlement of public funds suspected',
     ],
+    SEXUAL_HARASSMENT: [
+      'Workplace harassment complaint filed',
+      'Sexual harassment in public transport reported',
+      'Online harassment case under investigation',
+      'Verbal harassment at workplace',
+      'Unwanted advances reported',
+      'Harassment via social media',
+      'Quid pro quo harassment allegation',
+    ],
   };
 
   const obEntries = [];
@@ -370,10 +379,10 @@ async function main() {
     
     const entry = await prisma.occurrenceBook.create({
       data: {
-        id: cuid(),
+        id: createId(),
         obNumber: `${station.code}/${year}/${obNum}`,
         incidentDate: incidentDate,
-        reportedDate: new Date(incidentDate.getTime() + Math.random() * 86400000), // Within 24 hours
+        reportedDate: new Date(incidentDate.getTime() + Math.random() * 86400000),
         category: category,
         description: description,
         location: `${station.address} vicinity`,
@@ -385,8 +394,15 @@ async function main() {
         stationId: station.id,
         recordedById: recordedBy.id,
         evidenceFiles: [],
-        witnesses: Math.random() > 0.7 ? { count: Math.floor(Math.random() * 5) + 1, names: [] } : null,
-        suspects: Math.random() > 0.6 ? { count: Math.floor(Math.random() * 3) + 1, descriptions: [] } : null,
+        // FIXED: Using Prisma.JsonNull for JSON fields
+        witnesses: Math.random() > 0.7 ? { 
+          count: Math.floor(Math.random() * 5) + 1, 
+          names: [] 
+        } : Prisma.JsonNull,
+        suspects: Math.random() > 0.6 ? { 
+          count: Math.floor(Math.random() * 3) + 1, 
+          descriptions: [] 
+        } : Prisma.JsonNull,
       },
     });
     obEntries.push(entry);
@@ -400,7 +416,7 @@ async function main() {
 
   // Create Cases from some OB entries
   console.log('⚖️  Creating cases...');
-  const casesToCreate = randomItems(obEntries, 100); // Convert 100 OB entries to cases
+  const casesToCreate = randomItems(obEntries, 100);
   const caseStatuses: CaseStatus[] = ['OPEN', 'UNDER_INVESTIGATION', 'PENDING_TRIAL', 'IN_COURT', 'CLOSED', 'DISMISSED'];
   
   const cases = [];
@@ -413,7 +429,7 @@ async function main() {
     
     const caseRecord = await prisma.case.create({
       data: {
-        id: cuid(),
+        id: createId(),
         caseNumber: `${obEntry.obNumber.replace(/\//g, '-')}-CASE`,
         title: `${obEntry.category} Investigation`,
         description: obEntry.description,
@@ -459,7 +475,7 @@ async function main() {
       where: { idNumber: data.idNumber },
       update: {},
       create: {
-        id: cuid(),
+        id: createId(),
         ...data,
         nationality: 'Kenyan',
         phoneNumber: `+254-7${Math.floor(Math.random() * 10)}${Math.floor(Math.random() * 10)}-${Math.floor(Math.random() * 900000 + 100000)}`,
@@ -480,38 +496,41 @@ async function main() {
   }
   console.log(`✅ Created ${criminals.length} criminal records\n`);
 
-  // Create Vehicles
-  console.log('🚔 Creating police vehicles...');
+ // Create Vehicles - FIXED VERSION
+console.log('🚔 Creating police vehicles...');
+
+const vehicleMakes = ['Toyota', 'Nissan', 'Mitsubishi', 'Isuzu', 'Land Rover'];
+const vehicleModels = ['Land Cruiser', 'Patrol', 'Hilux', 'Pajero', 'D-Max', 'Defender'];
+const vehicleColors = ['White', 'Blue', 'Green', 'Silver', 'Black'];
+
+const vehicles = [];
+for (let i = 0; i < 50; i++) {
+  const station = randomItem(stations);
   
-  const vehicleMakes = ['Toyota', 'Nissan', 'Mitsubishi', 'Isuzu', 'Land Rover'];
-  const vehicleModels = ['Land Cruiser', 'Patrol', 'Hilux', 'Pajero', 'D-Max', 'Defender'];
-  const vehicleColors = ['White', 'Blue', 'Green', 'Silver', 'Black'];
+  // FIX: Check if users exist for this station first
+  const stationUsers = users.filter(u => u.stationId === station.id);
+  const assignedOfficer = stationUsers.length > 0 ? randomItem(stationUsers) : null;
   
-  const vehicles = [];
-  for (let i = 0; i < 50; i++) {
-    const station = randomItem(stations);
-    const assignedOfficer = randomItem(users.filter(u => u.stationId === station.id));
-    
-    const vehicle = await prisma.vehicle.create({
-      data: {
-        id: cuid(),
-        registrationNumber: `KCA-${String(i + 1).padStart(3, '0')}${String.fromCharCode(65 + Math.floor(Math.random() * 26))}`,
-        make: randomItem(vehicleMakes),
-        model: randomItem(vehicleModels),
-        year: Math.floor(Math.random() * 10) + 2015,
-        color: randomItem(vehicleColors),
-        stationId: station.id,
-        assignedTo: Math.random() > 0.3 ? assignedOfficer.id : null,
-        mileage: Math.floor(Math.random() * 100000) + 10000,
-        lastService: randomDate(new Date('2024-01-01'), new Date()),
-        nextService: randomDate(new Date(), new Date(Date.now() + 90 * 24 * 60 * 60 * 1000)),
-        status: Math.random() > 0.1 ? 'ACTIVE' : randomItem(['MAINTENANCE', 'INACTIVE']),
-        fuelConsumption: [],
-      },
-    });
-    vehicles.push(vehicle);
-  }
-  console.log(`✅ Created ${vehicles.length} vehicles\n`);
+  const vehicle = await prisma.vehicle.create({
+    data: {
+      id: createId(),
+      registrationNumber: `KCA-${String(i + 1).padStart(3, '0')}${String.fromCharCode(65 + Math.floor(Math.random() * 26))}`,
+      make: randomItem(vehicleMakes),
+      model: randomItem(vehicleModels),
+      year: Math.floor(Math.random() * 10) + 2015,
+      color: randomItem(vehicleColors),
+      stationId: station.id,
+      assignedTo: assignedOfficer ? assignedOfficer.id : null, // FIX: Handle null case
+      mileage: Math.floor(Math.random() * 100000) + 10000,
+      lastService: randomDate(new Date('2024-01-01'), new Date()),
+      nextService: randomDate(new Date(), new Date(Date.now() + 90 * 24 * 60 * 60 * 1000)),
+      status: Math.random() > 0.1 ? 'ACTIVE' : randomItem(['MAINTENANCE', 'INACTIVE']),
+      fuelConsumption: [],
+    },
+  });
+  vehicles.push(vehicle);
+}
+console.log(`✅ Created ${vehicles.length} vehicles\n`);
 
   // Create Alerts/APBs
   console.log('🚨 Creating alerts and APBs...');
@@ -529,8 +548,9 @@ async function main() {
     'Livestock Theft Pattern Alert',
   ];
 
-  const alertTypes = ['CRITICAL', 'WARNING', 'INFO', 'APB'] as const;
-  const alertPriorities = ['URGENT', 'HIGH', 'MEDIUM', 'LOW'] as const;
+  // FIXED: Removed 'as const' and typed arrays properly
+  const alertTypes: AlertType[] = ['CRITICAL', 'WARNING', 'INFO', 'APB'];
+  const alertPriorities: AlertPriority[] = ['URGENT', 'HIGH', 'MEDIUM', 'LOW'];
 
   const alerts = [];
   for (let i = 0; i < 20; i++) {
@@ -539,10 +559,12 @@ async function main() {
     
     const alert = await prisma.alert.create({
       data: {
+        id: createId(),
         title: randomItem(alertTitles),
         message: `Detailed alert information regarding this incident. All officers should be on high alert and report any relevant sightings or information immediately.`,
-        type: randomItem(alertTypes),
-        priority: randomItem(alertPriorities),
+        // FIXED: Using spread operator to create mutable copies
+        type: randomItem([...alertTypes]),
+        priority: randomItem([...alertPriorities]),
         scope: Math.random() > 0.5 ? 'STATION' : 'COUNTY',
         targetRoles: randomItems(['OFFICER', 'DETECTIVE', 'TRAFFIC_OFFICER', 'CONSTABLE'], Math.floor(Math.random() * 3) + 1),
         createdById: creator.id,
@@ -555,121 +577,156 @@ async function main() {
   }
   console.log(`✅ Created ${alerts.length} alerts\n`);
 
-  // Create Internal Messages
-  console.log('💬 Creating internal messages...');
-  
-  const messageSubjects = [
-    'Case Update Required',
-    'Equipment Request',
-    'Meeting Scheduled',
-    'Training Session Notification',
-    'Vehicle Maintenance Schedule',
-    'Report Submission Reminder',
-    'Patrol Route Assignment',
-    'Evidence Collection Protocol',
-    'Community Policing Initiative',
-    'Budget Review Meeting',
-  ];
+// Create Internal Messages - FIXED VERSION
+console.log('💬 Creating internal messages...');
 
-  const messages = [];
-  for (let i = 0; i < 100; i++) {
-    const sender = randomItem(users);
-    const receiver = randomItem(users.filter(u => u.id !== sender.id && u.stationId === sender.stationId));
-    
-    const message = await prisma.internalMessage.create({
-      data: {
-        senderId: sender.id,
-        receiverId: receiver.id,
-        subject: randomItem(messageSubjects),
-        content: `This is an internal communication regarding official police business. Please review and respond accordingly.`,
-        status: randomItem(['SENT', 'DELIVERED', 'READ']),
-        priority: randomItem(['LOW', 'MEDIUM', 'HIGH', 'URGENT']),
-        isRead: Math.random() > 0.4,
-        readAt: Math.random() > 0.5 ? randomDate(new Date('2024-01-01'), new Date()) : null,
-        stationId: sender.stationId,
-      },
-    });
-    messages.push(message);
-  }
-  console.log(`✅ Created ${messages.length} internal messages\n`);
+const messageSubjects = [
+  'Case Update Required',
+  'Equipment Request',
+  'Meeting Scheduled',
+  'Training Session Notification',
+  'Vehicle Maintenance Schedule',
+  'Report Submission Reminder',
+  'Patrol Route Assignment',
+  'Evidence Collection Protocol',
+  'Community Policing Initiative',
+  'Budget Review Meeting',
+];
 
-  // Create Notifications
-  console.log('🔔 Creating notifications...');
+const messages = [];
+for (let i = 0; i < 100; i++) {
+  const sender = randomItem(users);
   
-  const notificationTypes = ['CASE_ASSIGNED', 'ALERT', 'MESSAGE', 'SYSTEM', 'REMINDER'];
+  // FIX: Filter users in the same station AND ensure there are others to send to
+  const potentialReceivers = users.filter(u => u.id !== sender.id && u.stationId === sender.stationId);
   
-  const notifications = [];
-  for (let i = 0; i < 150; i++) {
-    const user = randomItem(users);
-    
-    const notification = await prisma.notification.create({
-      data: {
-        userId: user.id,
-        title: randomItem(['New Case Assigned', 'Alert Update', 'New Message', 'System Notice', 'Reminder']),
-        message: 'You have a new notification requiring your attention.',
-        type: randomItem(notificationTypes),
-        isRead: Math.random() > 0.5,
-        readAt: Math.random() > 0.6 ? randomDate(new Date('2024-01-01'), new Date()) : null,
-      },
-    });
-    notifications.push(notification);
-  }
-  console.log(`✅ Created ${notifications.length} notifications\n`);
+  // If no receivers in the same station, find any other user
+  const receiver = potentialReceivers.length > 0 
+    ? randomItem(potentialReceivers) 
+    : randomItem(users.filter(u => u.id !== sender.id)); // Fallback to any user
+  
+  const message = await prisma.internalMessage.create({
+    data: {
+      id: createId(),
+      senderId: sender.id,
+      receiverId: receiver.id,
+      subject: randomItem(messageSubjects),
+      content: `This is an internal communication regarding official police business. Please review and respond accordingly.`,
+      status: randomItem(['SENT', 'DELIVERED', 'READ']),
+      priority: randomItem(['LOW', 'MEDIUM', 'HIGH', 'URGENT']),
+      isRead: Math.random() > 0.4,
+      readAt: Math.random() > 0.5 ? randomDate(new Date('2024-01-01'), new Date()) : null,
+      stationId: sender.stationId,
+    },
+  });
+  messages.push(message);
+}
+console.log(`✅ Created ${messages.length} internal messages\n`);
 
-  // Create Audit Logs
-  console.log('📝 Creating audit logs...');
-  
-  const actions = ['CREATE', 'UPDATE', 'DELETE', 'LOGIN', 'LOGOUT', 'VIEW'];
-  const entities = ['User', 'Station', 'OccurrenceBook', 'Case', 'Criminal', 'Vehicle', 'Alert'];
-  
-  const auditLogs = [];
-  for (let i = 0; i < 200; i++) {
-    const user = randomItem(users);
-    
-    const auditLog = await prisma.auditLog.create({
-      data: {
-        id: cuid(),
-        userId: user.id,
-        action: randomItem(actions),
-        entity: randomItem(entities),
-        entityId: cuid(),
-        changes: {
-          before: { status: 'old_value' },
-          after: { status: 'new_value' },
-        },
-        ipAddress: `192.168.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`,
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
-    });
-    auditLogs.push(auditLog);
-  }
-  console.log(`✅ Created ${auditLogs.length} audit logs\n`);
+// Create Notifications - FIXED VERSION
+console.log('🔔 Creating notifications...');
 
-  // Create Public Reports
-  console.log('📢 Creating public reports...');
-  
-  const publicReports = [];
-  for (let i = 0; i < 50; i++) {
-    const station = randomItem(stations);
-    const reporterFirst = randomItem(firstNames);
-    const reporterLast = randomItem(lastNames);
-    
-    const report = await prisma.publicReport.create({
-      data: {
-        category: randomItem(categories),
-        description: `Public report submitted through online portal. ${randomItem(incidentDescriptions[randomItem(categories)])}`,
-        location: `${station.county}, ${station.subCounty}`,
-        reporterName: Math.random() > 0.3 ? `${reporterFirst} ${reporterLast}` : 'Anonymous',
-        reporterEmail: Math.random() > 0.3 ? `${reporterFirst.toLowerCase()}@email.com` : null,
-        reporterPhone: `+254-7${Math.floor(Math.random() * 10)}${Math.floor(Math.random() * 10)}-${Math.floor(Math.random() * 900000 + 100000)}`,
-        isAnonymous: Math.random() > 0.7,
-        status: randomItem(['PENDING', 'REVIEWED', 'ASSIGNED', 'CONVERTED', 'CLOSED']),
-        assignedToStation: Math.random() > 0.3 ? station.id : null,
-      },
-    });
-    publicReports.push(report);
+const notificationTypes = ['CASE_ASSIGNED', 'ALERT', 'MESSAGE', 'SYSTEM', 'REMINDER'];
+
+const notifications = [];
+for (let i = 0; i < 150; i++) {
+  // FIX: Check if users array is not empty
+  if (users.length === 0) {
+    console.log('⚠️  Skipping notifications - no users available');
+    break;
   }
-  console.log(`✅ Created ${publicReports.length} public reports\n`);
+  
+  const user = randomItem(users);
+  
+  const notification = await prisma.notification.create({
+    data: {
+      id: createId(),
+      userId: user.id,
+      title: randomItem(['New Case Assigned', 'Alert Update', 'New Message', 'System Notice', 'Reminder']),
+      message: 'You have a new notification requiring your attention.',
+      type: randomItem(notificationTypes),
+      isRead: Math.random() > 0.5,
+      readAt: Math.random() > 0.6 ? randomDate(new Date('2024-01-01'), new Date()) : null,
+    },
+  });
+  notifications.push(notification);
+}
+console.log(`✅ Created ${notifications.length} notifications\n`);
+
+// Create Audit Logs - FIXED VERSION
+console.log('📝 Creating audit logs...');
+
+const actions = ['CREATE', 'UPDATE', 'DELETE', 'LOGIN', 'LOGOUT', 'VIEW'];
+const entities = ['User', 'Station', 'OccurrenceBook', 'Case', 'Criminal', 'Vehicle', 'Alert'];
+
+const auditLogs = [];
+for (let i = 0; i < 200; i++) {
+  // FIX: Check if users array is not empty
+  if (users.length === 0) {
+    console.log('⚠️  Skipping audit logs - no users available');
+    break;
+  }
+  
+  const user = randomItem(users);
+  
+  const auditLog = await prisma.auditLog.create({
+    data: {
+      id: createId(),
+      userId: user.id,
+      action: randomItem(actions),
+      entity: randomItem(entities),
+      entityId: createId(),
+      changes: {
+        before: { status: 'old_value' },
+        after: { status: 'new_value' },
+      },
+      ipAddress: `192.168.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    },
+  });
+  auditLogs.push(auditLog);
+}
+console.log(`✅ Created ${auditLogs.length} audit logs\n`);
+
+// Create Public Reports - FIXED VERSION
+console.log('📢 Creating public reports...');
+
+const publicReports = [];
+for (let i = 0; i < 50; i++) {
+  // FIX: Check if stations array is not empty
+  if (stations.length === 0) {
+    console.log('⚠️  Skipping public reports - no stations available');
+    break;
+  }
+  
+  const station = randomItem(stations);
+  const reporterFirst = randomItem(firstNames);
+  const reporterLast = randomItem(lastNames);
+  
+  // FIX: Get a random category safely
+  const randomCategory = categories.length > 0 ? randomItem(categories) : 'OTHER';
+  const categoryDescriptions = incidentDescriptions[randomCategory] || ['Report submitted'];
+  const description = categoryDescriptions.length > 0 
+    ? randomItem(categoryDescriptions) 
+    : 'Report submitted';
+  
+  const report = await prisma.publicReport.create({
+    data: {
+      id: createId(),
+      category: randomCategory,
+      description: `Public report submitted through online portal. ${description}`,
+      location: `${station.county}, ${station.subCounty}`,
+      reporterName: Math.random() > 0.3 ? `${reporterFirst} ${reporterLast}` : 'Anonymous',
+      reporterEmail: Math.random() > 0.3 ? `${reporterFirst.toLowerCase()}@email.com` : null,
+      reporterPhone: `+254-7${Math.floor(Math.random() * 10)}${Math.floor(Math.random() * 10)}-${Math.floor(Math.random() * 900000 + 100000)}`,
+      isAnonymous: Math.random() > 0.7,
+      status: randomItem(['PENDING', 'REVIEWED', 'ASSIGNED', 'CONVERTED', 'CLOSED']),
+      assignedToStation: Math.random() > 0.3 ? station.id : null,
+    },
+  });
+  publicReports.push(report);
+}
+console.log(`✅ Created ${publicReports.length} public reports\n`);
 
   // Summary
   console.log('\n' + '='.repeat(60));
